@@ -66,6 +66,18 @@ over month. The risk wasn't reputation. It was absence.
 > sentiment verdict, the reasoning, the matched brands and the originating
 > question, filterable by platform / sentiment / mention without re-querying.
 
+### Multi-workspace Ahrefs tokens
+
+If you belong to more than one Ahrefs workspace you'll have more than one OAuth
+token, and **each one sees a different, non-overlapping set of Brand Radar
+reports**. Hardcoding a single secret makes reports in the other workspace look
+like they don't exist.
+
+`AHREFS_SECRETS` in the engine lists every secret name. `refresh_reports()` walks
+them all and stamps each cached report with the token that returned it
+(`bas_report.secret`); `secret_for(report_id)` resolves it on every later call.
+Add a third workspace by adding one list entry.
+
 ## Tab 2 — What each brand is better for
 
 Same raw answers, a different question: **what does the AI think each brand is
