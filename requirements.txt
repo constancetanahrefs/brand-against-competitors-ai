@@ -1,0 +1,9 @@
+# The app runs inside the Letaido Console scaffold, which already provides these.
+# Listed for anyone porting it to a standalone Flask app (see docs/PORTING.md).
+Flask>=3.0
+Flask-SQLAlchemy>=3.1
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+pydantic>=2.6
+requests>=2.31
+openai>=1.30
