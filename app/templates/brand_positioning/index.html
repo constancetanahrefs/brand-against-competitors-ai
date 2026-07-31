@@ -26,8 +26,10 @@
   <a href="/reports/" class="text-xs text-muted-foreground hover:text-foreground no-underline w-fit">&larr; All reports</a>
 
   <div class="flex flex-col gap-1">
+    {# Server-rendered so the pinned brand is visible before JS runs; the script
+       then refines it with the competitor list. #}
     <h1 id="reportTitle" class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
-      What AI says about your brand against competitors
+      {{ report_title or "What AI says about your brand against competitors" }}
     </h1>
     <p id="reportBrands" class="text-sm text-muted-foreground"></p>
   </div>
@@ -37,7 +39,7 @@
     <a href="{{ positioning_url }}" class="px-3 sm:px-4 py-2 text-sm font-semibold rounded-t-lg border border-border border-b-transparent bg-card text-foreground relative top-px">What each brand is better for</a>
   </nav>
 
-  {% if not reports %}
+  {% if not report %}
   <section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
     No AI answers are stored yet. Fetch some in the
     <a href="{{ sentiment_url }}" class="underline text-foreground">Sentiment &amp; criticism</a> tab first —
@@ -59,14 +61,13 @@
       <div class="flex flex-col gap-1.5">
         <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
           Brand Radar report
-          {{ tip("Only reports whose AI answers are already stored appear here. To add a report, fetch it in the <b>Sentiment &amp; criticism</b> tab first — both tabs read the same raw answers.") }}
+          {{ tip("This report is pinned to ONE Brand Radar project and reads only its data. To analyse another project, use its own report under All reports.") }}
         </label>
-        <select id="reportSel" onchange="onReportChange()"
-                class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
-          {% for r in reports %}
-          <option value="{{ r.report_id }}">{{ r.name }} — {{ "{:,}".format(r.n_stored) }} answers stored</option>
-          {% endfor %}
-        </select>
+        <div class="rounded-md border border-border bg-muted text-sm text-foreground p-2 flex flex-wrap items-center gap-2">
+          <span class="font-medium">{{ report.name or "(untitled report)" }}</span>
+          <span class="text-xs text-muted-foreground font-mono">{{ report_id }}</span>
+        </div>
+        <input type="hidden" id="reportSel" value="{{ report_id }}">
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -192,7 +193,8 @@
 <script>
 const API = {{ api|tojson }};
 const PLABEL = {{ platform_labels|tojson }};
-const REPORTS = {{ reports|tojson }};
+const REPORT = {{ report|tojson }};
+const REPORT_ID = {{ report_id|tojson }};
 
 let ctx = null, activeBrand = null, jobId = null, jobTimer = null;
 let sel = {platforms: [], months: []};
@@ -252,7 +254,7 @@ function syncSel(){
 }
 
 function renderChips(){
-  const rep = REPORTS.find(r=>r.report_id===reportId()) || {};
+  const rep = REPORT || {};
   const allP = boxes('platformBoxes').length, allM = boxes('monthBoxes').length;
   const c = [
     ['Report', rep.name || '—'],
@@ -529,7 +531,7 @@ async function cancelJob(){
 }
 
 (async function(){
-  if (!REPORTS.length) return;
+  if (!REPORT_ID) return;
   await loadContext();
   const r = await fetch(API.active); const d = await r.json();
   if ((d.jobs||[]).length) watchJob(d.jobs[0].job_id);
