@@ -37,6 +37,24 @@ blueprint = Blueprint("brand_answer_sentiment", __name__,
                       template_folder="../templates/brand_answer_sentiment")
 blueprint.register_blueprint(_positioning_bp, url_prefix="/positioning")
 
+
+# Idempotent forward migration — runs at import under the `console` OS user,
+# which owns these tables (the agent user cannot ALTER them).
+def _run_migrations():
+    try:
+        from sqlalchemy import text
+        with db_session.begin():
+            db_session.execute(text(
+                "ALTER TABLE bas_report ADD COLUMN IF NOT EXISTS "
+                "secret varchar(64) DEFAULT 'ahrefs_oauth'"))
+    except Exception as e:
+        print(f"[brand_answer_sentiment] migration note: {e}")
+
+
+@blueprint.record_once
+def _on_register(setup_state):
+    _run_migrations()
+
 DEFAULT_WINDOW = 3   # months — confirmed default backfill scope
 VALID_VERDICTS = {"positive", "neutral", "mixed", "negative", "absent", "unjudged"}
 
