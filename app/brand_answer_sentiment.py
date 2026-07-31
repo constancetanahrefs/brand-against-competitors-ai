@@ -28,9 +28,14 @@ from ._brand_answer_sentiment_models import (
     BasReport, BasFetch, BasResponse, BasVerdict, BasJob,
 )
 from . import _brand_answer_sentiment_engine as E
+# The positioning view is a SUB-REPORT of this one: same stored answers, different
+# question. It lives in its own module for size, but is mounted below so the pair
+# shows up as ONE report in /reports.
+from ._brand_positioning_view import blueprint as _positioning_bp
 
 blueprint = Blueprint("brand_answer_sentiment", __name__,
                       template_folder="../templates/brand_answer_sentiment")
+blueprint.register_blueprint(_positioning_bp, url_prefix="/positioning")
 
 DEFAULT_WINDOW = 3   # months — confirmed default backfill scope
 VALID_VERDICTS = {"positive", "neutral", "mixed", "negative", "absent", "unjudged"}
@@ -184,7 +189,9 @@ def index():
                            platforms=E.PLATFORMS,
                            platform_labels=E.PLATFORM_LABELS,
                            dataset_labels=E.DATASET_LABELS,
-                           default_window=DEFAULT_WINDOW)
+                           default_window=DEFAULT_WINDOW,
+                           sentiment_url="/reports/brand_answer_sentiment/",
+                           positioning_url="/reports/brand_answer_sentiment/positioning/")
 
 
 @blueprint.route("/api/reports")
