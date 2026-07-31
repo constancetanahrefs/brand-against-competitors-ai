@@ -2,19 +2,22 @@
 
 **What do AI assistants actually say about your brand — and is it getting worse?**
 
-**One report, two tabs** over every AI answer to your tracked prompts from
-[Ahrefs Brand Radar](https://ahrefs.com/brand-radar):
+**One report per brand, two tabs each**, over every AI answer to your tracked
+prompts from [Ahrefs Brand Radar](https://ahrefs.com/brand-radar):
 
-1. **What AI says about your brand against competitors** — was your brand
-   mentioned at all, was the mention good or bad, and which prompts produce the
-   most criticism.
+1. **Sentiment & criticism** — was your brand mentioned at all, was the mention
+   good or bad, and which prompts produce the most criticism.
 2. **What each brand is better for** — the *positioning* the AI assigns each
    brand, as semantic categories ("Backlink Analysis", "Budget & Small Teams"),
    one sub-tab per brand plus a side-by-side compare.
 
 Both tabs read one shared store of answers, so the second view costs no extra
-API calls. The title names the brands under comparison ("Ahrefs vs Semrush,
-Peec AI, +10 more") rather than describing the report generically.
+API calls. Each report is **pinned to a single Brand Radar project** and can only
+read that project's rows; the title names the brands under comparison ("Ahrefs vs
+Semrush, Peec AI, +10 more") rather than describing the report generically.
+
+Tracking three brands means three reports and three ~12-line files — the routes,
+engine, jobs and templates are shared. See **[Adding a brand](#adding-a-brand)**.
 
 Built as a [Letaido](https://letaido.com) Console report, but the logic is plain
 Flask + SQLAlchemy + Pydantic. If you're on another stack, **[docs/PORTING.md](docs/PORTING.md)**
@@ -173,16 +176,29 @@ These cost us time; they're the real value of this repo.
 4. **AIO / AI Mode history is short.** The current index only goes back to ~March 2026; the older keyword-index variants go further but carry different fields.
 5. **Custom prompts are free; the public prompt pool is not.** Same endpoint, one parameter apart, wildly different cost.
 6. **Mixed >> negative.** In our data mixed outnumbered negative 5:1. Where you draw the mixed/negative line determines your headline, so validate the rubric on real examples before classifying at scale.
+7. **Never run a DB query at import time in a Console app.** We recovered orphaned
+   background jobs with `threading.Timer(2.0, adopt_jobs)`. That query landed while
+   the app loader was still importing *other* apps' modules, so SQLAlchemy
+   configured its mappers against a half-built registry, **cached the failure, and
+   poisoned every ORM query in the process** — including apps we hadn't touched.
+   The traceback pointed at an unrelated model and was thoroughly misleading. Do
+   this work lazily in `@blueprint.before_request` instead, by which time every
+   model is registered.
+8. **Multiple Ahrefs tokens see different reports.** If the user belongs to more
+   than one Ahrefs workspace, a report that plainly exists will look absent
+   because you queried with the wrong credential. Persist which token owns each
+   report — see [Multi-workspace Ahrefs tokens](#multi-workspace-ahrefs-tokens).
 
 ## Repo layout
 
 ```
 app/
-  brand_answer_sentiment.py             Report blueprint (owns both tabs), schemas, jobs
+  brand_example.py                      ONE PER BRAND — copy it, edit 3 constants (this is the only file you write)
+  _brand_report_core.py                 Factory: make_report() builds a pinned report — routes, schemas, jobs, tab 1
   _brand_answer_sentiment_engine.py     Ahrefs pulls, mention regex, sentiment rubric, SQL aggregation
   _brand_answer_sentiment_models.py     bas_* models (5 tables) — the shared answer store
-  brand_answer_sentiment_monthly.py     Monthly refresh script (cron)
-  _brand_positioning_view.py            Tab 2: routes, schemas, two-stage jobs (nested blueprint)
+  brand_answer_sentiment_monthly.py     Monthly refresh script (cron) — covers every brand automatically
+  _brand_positioning_view.py            Factory: make_positioning() builds tab 2, nested under its parent
   _brand_positioning_engine.py          Claim extraction, embedding clustering, label merge
   _brand_positioning_models.py          bp_* models (3 tables)
   templates/
@@ -192,23 +208,62 @@ docs/
   PORTING.md                            Public Ahrefs API v3 endpoint map + what you must build yourself
 ```
 
-Tab 2 reads `bas_response` directly — it has no fetch path of its own, by
-design. Fetch a report in tab 1, analyse it in tab 2.
+Everything with a leading underscore is shared machinery. The Console loader only
+registers modules that expose `NAME` and don't start with `_`, so the factories
+stay invisible and each `brand_*.py` wrapper becomes its own report.
 
-Both are one Console report: `brand_answer_sentiment.py` owns the blueprint and
-mounts `_brand_positioning_view.py` as a nested blueprint at `/positioning/`, so
-the pair appears as a single entry in the reports list. The loader only lists
-modules that expose `NAME`, which is why the positioning module has none and
-carries a leading underscore.
+Tab 2 reads `bas_response` directly — it has no fetch path of its own, by
+design. Fetch in tab 1, analyse in tab 2.
+
+## Adding a brand
+
+```bash
+cp app/brand_example.py app/brand_acme.py
+```
+
+Edit the three constants:
+
+```python
+REPORT_ID = "abc12345-…"                      # Brand Radar report UUID
+NAME = "Acme — what AI says vs competitors"   # label in the reports list
+SLUG = "brand_acme"                           # MUST equal the filename
+```
+
+That's it — `/reports/brand_acme/` and `/reports/brand_acme/positioning/` appear
+on the next reload. No routes, engine or templates to copy.
+
+Two rules the loader enforces: the filename must not start with `_` (or it's
+skipped), and `SLUG` must equal the filename (the blueprint is mounted at
+`/reports/<filename>/`).
+
+### Why one report per project, not a picker
+
+The first version had a single report with a dropdown of every Brand Radar report
+in the workspace. It was worse in practice:
+
+* With ~70 reports, the one you'd just backfilled was invisible — the picker sat
+  inside a collapsed settings panel and the page auto-loaded the largest report.
+* A dropdown implies you can compare across projects, but each project has its
+  own brands, prompts and competitors — there's nothing meaningful to compare.
+* Scoping by a **request parameter** is fragile. Several routes read
+  `report_id` from the query string, and one stray read is a cross-project data
+  leak.
+
+Pinning fixes all three: `report_id` is closed over by the factory and never read
+from the request, so the report is *structurally* incapable of reading another
+project's data. The `report_id` fields on the request schemas are ignored, and
+`api/jobs/active` plus orphan-job recovery are scoped per report too, so one
+project's background job can't surface in another's progress box.
 
 ## Running it
 
 ### On Letaido
 
 Drop `app/*.py` into `/home/console/http/default/reports/` and the two template
-folders into `/home/console/http/default/templates/`. The scaffold auto-discovers
-the report at `/reports/brand_answer_sentiment/`, with the positioning tab at
-`/reports/brand_answer_sentiment/positioning/`. Requires an Ahrefs connector secret and
+folders into `/home/console/http/default/templates/`. Copy `brand_example.py` once
+per brand (see **[Adding a brand](#adding-a-brand)**); the scaffold auto-discovers
+each one at `/reports/<slug>/`, with its positioning tab at
+`/reports/<slug>/positioning/`. Requires an Ahrefs connector secret and
 PostgreSQL — both provided by the platform.
 
 For the monthly refresh, schedule `brand_answer_sentiment_monthly.py`
