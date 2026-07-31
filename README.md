@@ -19,7 +19,10 @@ Built as a [Letaido](https://letaido.com) Console report, but the logic is plain
 Flask + SQLAlchemy + Pydantic. If you're on another stack, **[docs/PORTING.md](docs/PORTING.md)**
 maps every call to its public Ahrefs API v3 endpoint.
 
-![Answer view with markdown rendering and brand highlighting](docs/screenshots/answer-markdown-brand-highlighting.png)
+> Each answer renders as markdown with brand names highlighted inline — the
+> subject brand in amber, competitors in blue, other niche tools in purple — so
+> you can see at a glance who the model put alongside you, with a "view raw
+> markdown" toggle for auditing.
 
 ---
 
@@ -58,7 +61,9 @@ over month. The risk wasn't reputation. It was absence.
 - Click any row for every dated response: the prompt asked, the verdict, a verbatim evidence quote, the full answer rendered as markdown, and the cited links
 - Answers highlight the **subject brand in amber**, **competitors in blue**, **niche entries in purple**
 
-![Prompt drill-down with per-prompt filters](docs/screenshots/prompt-drilldown.png)
+> The prompt drill-down lists every answer behind a prompt, each with its
+> sentiment verdict, the reasoning, the matched brands and the originating
+> question, filterable by platform / sentiment / mention without re-querying.
 
 ## Report 2 — What each brand is better for
 
@@ -172,7 +177,6 @@ app/
     brand_positioning/index.html
 docs/
   PORTING.md                            Public Ahrefs API v3 endpoint map + what you must build yourself
-  screenshots/
 ```
 
 Report 2 reads `bas_response` directly — it has no fetch path of its own, by
