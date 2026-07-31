@@ -2,7 +2,7 @@
 
 **What do AI assistants actually say about your brand — and is it getting worse?**
 
-**Two reports** over every AI answer to your tracked prompts from
+**One report, two tabs** over every AI answer to your tracked prompts from
 [Ahrefs Brand Radar](https://ahrefs.com/brand-radar):
 
 1. **What AI says about your brand against competitors** — was your brand
@@ -12,8 +12,9 @@
    brand, as semantic categories ("Backlink Analysis", "Budget & Small Teams"),
    one sub-tab per brand plus a side-by-side compare.
 
-Both read the same stored answers, so the second report costs no extra API
-calls.
+Both tabs read one shared store of answers, so the second view costs no extra
+API calls. The title names the brands under comparison ("Ahrefs vs Semrush,
+Peec AI, +10 more") rather than describing the report generically.
 
 Built as a [Letaido](https://letaido.com) Console report, but the logic is plain
 Flask + SQLAlchemy + Pydantic. If you're on another stack, **[docs/PORTING.md](docs/PORTING.md)**
@@ -41,7 +42,7 @@ answers were only **0.8%** of responses — but the brand went **unmentioned in 
 of answers to its *own tracked prompts*, and that mention rate was falling month
 over month. The risk wasn't reputation. It was absence.
 
-## Report 1 — What AI says about your brand against competitors
+## Tab 1 — Sentiment & criticism
 
 **Overview tab**
 
@@ -65,7 +66,7 @@ over month. The risk wasn't reputation. It was absence.
 > sentiment verdict, the reasoning, the matched brands and the originating
 > question, filterable by platform / sentiment / mention without re-querying.
 
-## Report 2 — What each brand is better for
+## Tab 2 — What each brand is better for
 
 Same raw answers, a different question: **what does the AI think each brand is
 FOR?** Instead of counting sentiment, it extracts the explicit positioning
@@ -165,11 +166,11 @@ These cost us time; they're the real value of this repo.
 
 ```
 app/
-  brand_answer_sentiment.py             Report 1: routes, Pydantic schemas, background jobs
+  brand_answer_sentiment.py             Report blueprint (owns both tabs), schemas, jobs
   _brand_answer_sentiment_engine.py     Ahrefs pulls, mention regex, sentiment rubric, SQL aggregation
   _brand_answer_sentiment_models.py     bas_* models (5 tables) — the shared answer store
   brand_answer_sentiment_monthly.py     Monthly refresh script (cron)
-  brand_positioning.py                  Report 2: routes, schemas, two-stage jobs
+  _brand_positioning_view.py            Tab 2: routes, schemas, two-stage jobs (nested blueprint)
   _brand_positioning_engine.py          Claim extraction, embedding clustering, label merge
   _brand_positioning_models.py          bp_* models (3 tables)
   templates/
@@ -179,8 +180,14 @@ docs/
   PORTING.md                            Public Ahrefs API v3 endpoint map + what you must build yourself
 ```
 
-Report 2 reads `bas_response` directly — it has no fetch path of its own, by
-design. Add a report in report 1, analyse it in report 2.
+Tab 2 reads `bas_response` directly — it has no fetch path of its own, by
+design. Fetch a report in tab 1, analyse it in tab 2.
+
+Both are one Console report: `brand_answer_sentiment.py` owns the blueprint and
+mounts `_brand_positioning_view.py` as a nested blueprint at `/positioning/`, so
+the pair appears as a single entry in the reports list. The loader only lists
+modules that expose `NAME`, which is why the positioning module has none and
+carries a leading underscore.
 
 ## Running it
 
@@ -188,8 +195,8 @@ design. Add a report in report 1, analyse it in report 2.
 
 Drop `app/*.py` into `/home/console/http/default/reports/` and the two template
 folders into `/home/console/http/default/templates/`. The scaffold auto-discovers
-both blueprints at `/reports/brand_answer_sentiment/` and
-`/reports/brand_positioning/`. Requires an Ahrefs connector secret and
+the report at `/reports/brand_answer_sentiment/`, with the positioning tab at
+`/reports/brand_answer_sentiment/positioning/`. Requires an Ahrefs connector secret and
 PostgreSQL — both provided by the platform.
 
 For the monthly refresh, schedule `brand_answer_sentiment_monthly.py`
