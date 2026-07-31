@@ -67,8 +67,10 @@
   <a href="/reports/" class="text-xs text-muted-foreground hover:text-foreground no-underline w-fit">&larr; All reports</a>
 
   <div class="flex flex-col gap-1">
+    {# Server-rendered so the pinned brand is visible before JS runs; the script
+       then refines it with the competitor list. #}
     <h1 id="reportTitle" class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
-      What AI says about your brand against competitors
+      {{ report_title or "What AI says about your brand against competitors" }}
     </h1>
     <p id="reportBrands" class="text-sm text-muted-foreground"></p>
   </div>
@@ -90,20 +92,19 @@
 
     <div id="settingsBody" class="hidden border-t border-border p-4 flex flex-col gap-4">
 
-      <!-- report -->
+      <!-- report (PINNED — one Console report per Brand Radar project) -->
       <div class="flex flex-col gap-1.5">
         <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
           Brand Radar report
-          {{ tip("Every report in your Ahrefs workspace. Reports with data already stored here are listed first. Picking a report re-reads its own brand, competitors and country filter.") }}
+          {{ tip("This report is pinned to ONE Brand Radar project and reads only its data. To analyse another project, use its own report under All reports.") }}
         </label>
-        <select id="reportSel" onchange="onReportChange()"
-                class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2 focus:outline-none focus:ring-1 focus:ring-ring">
-          {% for r in reports %}
-          <option value="{{ r.report_id }}">{{ r.name }}{% if r.n_stored %} — {{ "{:,}".format(r.n_stored) }} stored{% elif r.n_custom_prompts %} — {{ r.n_custom_prompts }} prompts{% endif %}</option>
-          {% endfor %}
-        </select>
+        <div class="rounded-md border border-border bg-muted text-sm text-foreground p-2 flex flex-wrap items-center gap-2">
+          <span class="font-medium">{{ report.name or "(untitled report)" }}</span>
+          <span class="text-xs text-muted-foreground font-mono">{{ report_id }}</span>
+        </div>
+        <input type="hidden" id="reportSel" value="{{ report_id }}">
         <div class="flex flex-wrap gap-2 pt-1">
-          <button onclick="refreshReports()" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Refresh report list</button>
+          <button onclick="refreshReports()" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Refresh report config</button>
           <button onclick="probeReport()" id="probeBtn" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Check available data</button>
           <span id="reportMeta" class="text-xs text-muted-foreground self-center"></span>
         </div>
@@ -495,24 +496,12 @@
 
 {% block scripts %}
 <script>
-const API = {
-  ctx:     "{{ url_for('brand_answer_sentiment.api_context') }}",
-  view:    "{{ url_for('brand_answer_sentiment.api_view') }}",
-  prompt:  "{{ url_for('brand_answer_sentiment.api_prompt') }}",
-  fetch:   "{{ url_for('brand_answer_sentiment.api_fetch') }}",
-  analyse: "{{ url_for('brand_answer_sentiment.api_analyse') }}",
-  probe:   "{{ url_for('brand_answer_sentiment.api_probe') }}",
-  refresh: "{{ url_for('brand_answer_sentiment.api_refresh_reports') }}",
-  job:     "{{ url_for('brand_answer_sentiment.api_job') }}",
-  cancel:  "{{ url_for('brand_answer_sentiment.api_job_cancel') }}",
-  active:  "{{ url_for('brand_answer_sentiment.api_jobs_active') }}",
-  browse:  "{{ url_for('brand_answer_sentiment.api_browse') }}",
-  response:"{{ url_for('brand_answer_sentiment.api_response') }}",
-};
+const API = {{ api|tojson }};
 const PLATFORMS = {{ platforms|tojson }};
 const PLABEL = {{ platform_labels|tojson }};
 const DLABEL = {{ dataset_labels|tojson }};
-const REPORTS = {{ reports|tojson }};
+const REPORT = {{ report|tojson }};
+const REPORT_ID = {{ report_id|tojson }};
 
 let ctx = null;          // {report, entities, coverage, filters}
 let view = null;
@@ -552,7 +541,7 @@ async function probeReport(){
 const reportId = () => document.getElementById('reportSel').value;
 const subject  = () => document.getElementById('subjectSel').value;
 
-function reportRow(){ return REPORTS.find(r => r.report_id === reportId()) || {}; }
+function reportRow(){ return REPORT || {}; }
 
 async function onReportChange(){ await loadContext(); }
 async function onSubjectChange(){ await loadContext(true); }
@@ -1340,9 +1329,8 @@ function toggleRawAnswer(){
 
 // -------------------------------------------------------------------- startup
 (async function(){
-  if (!REPORTS.length){
-    renderEmpty('No Brand Radar reports cached yet — click “Refresh report list” in Report settings.');
-    document.getElementById('settingsBody').classList.remove('hidden');
+  if (!REPORT_ID){
+    renderEmpty('This report is not pinned to a Brand Radar report.');
     return;
   }
   showTab('overview');
