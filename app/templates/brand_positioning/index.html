@@ -1,0 +1,523 @@
+{% extends "base.html" %}
+{% block title %}What each brand is better for{% endblock %}
+{% block head %}
+<style>
+  .bar { display:flex; height:6px; border-radius:999px; overflow:hidden; background:oklch(var(--muted)); }
+  .bar > span { display:block; height:100%; }
+  .fill-own  { background:#f59e0b; }
+  .fill-comp { background:#3b82f6; }
+  .chip { display:inline-flex; align-items:center; gap:.25rem; }
+  mark.bh { padding:.05rem .2rem; border-radius:.2rem; font-weight:600; }
+  mark.bh-subject    { background:#fde68a; color:#78350f; }
+  mark.bh-competitor { background:#dbeafe; color:#1e3a8a; }
+</style>
+{% endblock %}
+
+{% macro tip(text) -%}
+<span class="relative group inline-block align-middle">
+  <span class="cursor-help text-muted-foreground text-xs">&#9432;</span>
+  <span class="absolute bottom-full mb-1 left-0 hidden group-hover:block z-50 bg-card border border-border rounded-lg shadow-lg p-2.5 text-[11px] leading-snug text-foreground w-64 normal-case font-normal">{{ text|safe }}</span>
+</span>
+{%- endmacro %}
+
+{% block content %}
+<div class="flex flex-col gap-4" id="app">
+
+  <h1 class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
+    What each brand is better for
+  </h1>
+  <p class="text-sm text-muted-foreground -mt-2">
+    Semantic positioning categories extracted from the same AI answers as
+    <a href="{{ sentiment_url }}" class="underline text-foreground">What AI says about your brand against competitors</a>.
+    No new data is fetched here.
+  </p>
+
+  {% if not reports %}
+  <section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
+    No AI answers are stored yet. Fetch some in
+    <a href="{{ sentiment_url }}" class="underline text-foreground">the sentiment report</a> first —
+    this report reads the same database.
+  </section>
+  {% else %}
+
+  <!-- ============================================================ SETTINGS -->
+  <section class="bg-card border border-border rounded-xl">
+    <button onclick="toggleSettings()" class="w-full flex items-start justify-between gap-3 p-4 text-left">
+      <div class="min-w-0">
+        <div class="text-xs uppercase tracking-wide text-muted-foreground">Report settings</div>
+        <div id="chips" class="mt-2 flex flex-wrap gap-1.5 text-xs"></div>
+      </div>
+      <span id="settingsCaret" class="text-muted-foreground text-sm shrink-0 mt-1">▾</span>
+    </button>
+
+    <div id="settingsBody" class="hidden border-t border-border p-4 flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
+        <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Brand Radar report
+          {{ tip("Only reports whose AI answers are already stored appear here. To add a report, fetch it in the sentiment report first — both reports read the same raw answers.") }}
+        </label>
+        <select id="reportSel" onchange="onReportChange()"
+                class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+          {% for r in reports %}
+          <option value="{{ r.report_id }}">{{ r.name }} — {{ "{:,}".format(r.n_stored) }} answers stored</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Platforms
+            {{ tip("Filters which AI platforms' answers count toward the categories. Free — re-aggregated from stored claims, no LLM call.") }}
+          </div>
+          <div id="platformBoxes" class="flex flex-wrap gap-1.5 text-xs"></div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Months
+            {{ tip("Snapshot months to include. Useful for spotting a positioning shift — a category that only appears in recent months is a change in how the AI frames the brand.") }}
+          </div>
+          <div id="monthBoxes" class="flex flex-wrap gap-1.5 text-xs"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Show
+            {{ tip("<b>Better for</b> = use cases the AI recommends this brand FOR. <b>Not chosen for</b> = use cases where the AI says it's unsuitable, too expensive, or too complex. Both are extracted in the same pass.") }}
+          </label>
+          <select id="polSel" onchange="loadBrand()" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+            <option value="strength">What it's better for</option>
+            <option value="weakness">What it's NOT chosen for</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Minimum share
+            {{ tip("Hides long-tail categories. A group of 2 claims out of 4,000 is noise, not a positioning theme — the default keeps categories worth at least 1% of the brand's claims. Set to 0 to see every category.") }}
+          </label>
+          <select id="minShareSel" onchange="loadBrand()" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+            <option value="1">1% or more (default)</option>
+            <option value="2">2% or more</option>
+            <option value="5">5% or more</option>
+            <option value="0">Show every category</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Sort categories
+            {{ tip("Claims = how many individual statements landed in the category. Answers = how many distinct AI answers it came from (a single answer can state the same thing twice).") }}
+          </label>
+          <select id="sortSel" onchange="loadBrand()" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+            <option value="claims">Most claims</option>
+            <option value="responses">Most distinct answers</option>
+            <option value="label">Category name (A–Z)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- coverage / build controls -->
+      <div class="flex flex-col gap-2 pt-1 border-t border-border">
+        <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Analysis coverage
+          {{ tip("<b>Read</b> = answers already passed through claim extraction (cached — never re-read). <b>Claims</b> = positioning statements found. <b>Categories</b> = semantic groups built from those claims. Extract costs LLM calls; grouping is cheap and can be re-run freely.") }}
+        </div>
+        <div id="coverage" class="text-xs flex flex-col gap-1.5"></div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="startExtract(false)" id="extractBtn"
+                  class="px-3 py-1.5 rounded-md text-sm bg-brand text-brand-foreground font-medium">Analyse selected brands</button>
+          <button onclick="startExtract(true)" class="px-3 py-1.5 rounded-md text-sm border border-border hover:border-ring">Analyse ALL brands</button>
+          <button onclick="startGroup()" class="px-3 py-1.5 rounded-md text-sm border border-border hover:border-ring">Re-group only</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- job progress -->
+  <section id="jobBox" class="hidden bg-card border border-border rounded-xl p-4 flex flex-col gap-2">
+    <div class="flex items-center justify-between gap-3">
+      <div class="text-sm font-medium text-foreground" id="jobStage">working…</div>
+      <button onclick="cancelJob()" class="px-2 py-1 rounded-md text-xs border border-border hover:border-ring">Cancel</button>
+    </div>
+    <div class="h-1.5 rounded-full bg-muted overflow-hidden"><div id="jobBar" class="h-full bg-brand" style="width:0%"></div></div>
+    <pre id="jobLog" class="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-32 overflow-auto"></pre>
+  </section>
+
+  <!-- ======================================================= BRAND SUB-TABS -->
+  <nav class="flex gap-1 border-b border-border overflow-x-auto" id="brandTabs"></nav>
+
+  <div id="brandPane" class="flex flex-col gap-3"></div>
+  <div id="comparePane" class="hidden flex flex-col gap-3"></div>
+
+  <!-- methodology -->
+  <section class="bg-card border border-border rounded-xl p-4">
+    <button onclick="document.getElementById('method').classList.toggle('hidden')"
+            class="text-sm font-medium text-foreground">How this is calculated ▾</button>
+    <div id="method" class="hidden mt-3 text-xs text-muted-foreground flex flex-col gap-2">
+      <p><b class="text-foreground">Same source, no new fetch.</b> This report reads the AI answers already stored by the sentiment report. Nothing is pulled from Brand Radar here, so adding a report means fetching it there first.</p>
+      <p><b class="text-foreground">Stage 1 — extract claims.</b> For every stored answer that mentions a brand, ±420 characters around each mention (up to 3 excerpts) go to <code>gemini-3-flash</code> in batches of 8. The model returns only <i>explicit</i> positioning claims — "better for backlink analysis", "too expensive for solo users" — each with a <b>verbatim evidence span</b> and any brands it was contrasted against. A bare mention in a list is not a claim. Answers that yield nothing are recorded as read, so they're never re-sent. Cached per (answer, brand).</p>
+      <p><b class="text-foreground">Stage 2 — group semantically.</b> Claim phrases are deduped, embedded (<code>text-embedding-3-small</code>) and merged by cosine similarity, most-common phrasing first so groups are stable across re-runs. Then <code>claude-sonnet</code> <i>labels</i> the groups — it names them, it doesn't decide the grouping. A group needs at least 2 claims to become a category.</p>
+      <p><b class="text-foreground">Why two stages.</b> Extraction is the expensive part and is per-answer, so it caches perfectly. Grouping needs to see all claims at once and is cheap, so you can re-group after a new month — or at a different similarity threshold — without paying to re-read anything.</p>
+      <p><b class="text-foreground">Filtering re-aggregates from claims</b>, not from stored category totals, so a platform- or month-filtered view shows real filtered counts rather than global ones.</p>
+      <p><b class="text-foreground">Read the counts as evidence weight, not market truth.</b> A category with 40 claims means the AI said it 40 times across the answers you track — it is a measure of what the models assert, not of what is actually true about the product.</p>
+    </div>
+  </section>
+  {% endif %}
+</div>
+
+<!-- ============================================== category drill-down modal -->
+<div id="catModal" class="hidden fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-auto"
+     onclick="if(event.target===this) closeCat()">
+  <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-3xl my-6 flex flex-col">
+    <div class="flex items-start justify-between gap-3 p-4 border-b border-border">
+      <div class="min-w-0">
+        <div id="catMeta" class="text-[11px] uppercase tracking-wide text-muted-foreground"></div>
+        <h3 id="catLabel" class="text-base font-semibold text-foreground mt-1"></h3>
+        <p id="catSummary" class="text-xs text-muted-foreground mt-0.5"></p>
+      </div>
+      <button onclick="closeCat()" class="px-2 py-1 rounded-md text-xs border border-border hover:border-ring shrink-0">Close</button>
+    </div>
+    <div id="catBody" class="p-4 flex flex-col gap-2.5 text-sm"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API = {
+  ctx:      "{{ url_for('brand_positioning.api_context') }}",
+  brand:    "{{ url_for('brand_positioning.api_brand') }}",
+  category: "{{ url_for('brand_positioning.api_category') }}",
+  compare:  "{{ url_for('brand_positioning.api_compare') }}",
+  extract:  "{{ url_for('brand_positioning.api_extract') }}",
+  group:    "{{ url_for('brand_positioning.api_group') }}",
+  job:      "{{ url_for('brand_positioning.api_job') }}",
+  cancel:   "{{ url_for('brand_positioning.api_job_cancel') }}",
+  active:   "{{ url_for('brand_positioning.api_jobs_active') }}",
+};
+const PLABEL = {{ platform_labels|tojson }};
+const REPORTS = {{ reports|tojson }};
+
+let ctx = null, activeBrand = null, jobId = null, jobTimer = null;
+let sel = {platforms: [], months: []};
+
+const fmt = n => (n ?? 0).toLocaleString();
+const esc = s => (s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const reportId = () => document.getElementById('reportSel').value;
+const polarity = () => document.getElementById('polSel').value;
+
+function toggleSettings(){
+  const b = document.getElementById('settingsBody');
+  b.classList.toggle('hidden');
+  document.getElementById('settingsCaret').textContent = b.classList.contains('hidden') ? '▾' : '▴';
+}
+
+// Highlight the brand being discussed (amber = own, blue = competitor) so an
+// evidence quote reads the same way it does in the sentiment report.
+function markBrands(text, own){
+  let h = esc(text);
+  const ents = (ctx && ctx.brands) || [];
+  const sorted = [...ents].sort((a,b)=>b.brand.length - a.brand.length);
+  for (const e of sorted){
+    const cls = e.brand === own ? 'bh-subject' : 'bh-competitor';
+    const rx = new RegExp('(?<![A-Za-z0-9])(' + e.brand.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')(?![A-Za-z0-9])','gi');
+    h = h.replace(rx, `<mark class="bh ${cls}">$1</mark>`);
+  }
+  return h;
+}
+
+async function onReportChange(){ activeBrand = null; await loadContext(); }
+
+async function loadContext(){
+  const r = await fetch(`${API.ctx}?report_id=${encodeURIComponent(reportId())}`);
+  ctx = await r.json();
+  if (ctx.error){ document.getElementById('coverage').textContent = ctx.error; return; }
+
+  const f = ctx.filters || {platforms:[], months:[]};
+  document.getElementById('platformBoxes').innerHTML = f.platforms.length
+    ? f.platforms.map(p => `<label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="checkbox" value="${p}" checked onchange="syncSel()"><span>${PLABEL[p]||p}</span></label>`).join('')
+    : '<span class="text-muted-foreground">nothing analysed yet</span>';
+  document.getElementById('monthBoxes').innerHTML = f.months.length
+    ? f.months.map(m => `<label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="checkbox" value="${m}" checked onchange="syncSel()"><span>${m}</span></label>`).join('')
+    : '<span class="text-muted-foreground">nothing analysed yet</span>';
+
+  syncSel();
+  renderCoverage();
+  renderTabs();
+  await loadBrand();
+}
+
+function boxes(id){ return [...document.querySelectorAll(`#${id} input[type=checkbox]`)]; }
+function syncSel(){
+  sel.platforms = boxes('platformBoxes').filter(b=>b.checked).map(b=>b.value);
+  sel.months    = boxes('monthBoxes').filter(b=>b.checked).map(b=>b.value);
+  renderChips();
+}
+
+function renderChips(){
+  const rep = REPORTS.find(r=>r.report_id===reportId()) || {};
+  const allP = boxes('platformBoxes').length, allM = boxes('monthBoxes').length;
+  const c = [
+    ['Report', rep.name || '—'],
+    ['View', polarity()==='strength' ? "What it's better for" : "What it's NOT chosen for"],
+    ['Platforms', !allP ? '—' : (sel.platforms.length===allP ? `all (${allP})` : sel.platforms.map(p=>PLABEL[p]||p).join(', '))],
+    ['Months', !allM ? '—' : (sel.months.length===allM ? `all (${allM})` : sel.months.join(', '))],
+  ];
+  document.getElementById('chips').innerHTML = c.map(([k,v]) =>
+    `<span class="chip px-2 py-0.5 rounded-full bg-muted"><b class="text-foreground font-medium">${esc(k)}</b><span class="text-muted-foreground">${esc(v)}</span></span>`).join('');
+}
+
+function renderCoverage(){
+  const brands = (ctx && ctx.brands) || [];
+  const own = ctx.own_brand;
+  document.getElementById('coverage').innerHTML = brands.map(b => {
+    const pending = Math.max(0, b.mentions - b.read);
+    const state = b.categories
+      ? `<span class="text-foreground">${fmt(b.categories)} categories</span> · ${fmt(b.claims)} claims`
+      : (b.claims ? `${fmt(b.claims)} claims, <span class="text-orange-600 dark:text-orange-400">not grouped yet</span>`
+                  : '<span class="text-muted-foreground">not analysed</span>');
+    return `<label class="flex flex-wrap items-center gap-2 rounded-md border border-border px-2 py-1.5">
+      <input type="checkbox" class="brandPick" value="${esc(b.brand)}" ${b.brand===own?'checked':''}>
+      <span class="font-medium ${b.brand===own?'text-foreground':'text-muted-foreground'}">${esc(b.brand)}</span>
+      ${b.brand===own?'<span class="text-[10px] px-1.5 rounded bg-muted">your brand</span>':''}
+      <span class="text-muted-foreground ml-auto">${fmt(b.mentions)} mentions${pending?` · ${fmt(pending)} unread`:''} · ${state}</span>
+    </label>`;
+  }).join('') || '<span class="text-muted-foreground">This report has no brands configured.</span>';
+}
+
+function pickedBrands(){
+  return [...document.querySelectorAll('.brandPick:checked')].map(b=>b.value);
+}
+
+function renderTabs(){
+  const brands = (ctx && ctx.brands) || [];
+  const own = ctx.own_brand;
+  // brands with categories first; own brand always leftmost
+  const ordered = [...brands].sort((a,b) =>
+    (b.brand===own) - (a.brand===own) || (b.categories>0) - (a.categories>0) || b.claims - a.claims);
+  if (!activeBrand) activeBrand = (ordered.find(b=>b.categories>0) || ordered[0] || {}).brand;
+  const tabs = ordered.map(b => {
+    const on = b.brand === activeBrand;
+    const dim = b.categories ? '' : 'opacity-50';
+    return `<button onclick="selectBrand('${encodeURIComponent(b.brand)}')"
+      class="shrink-0 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${dim} ${on?'border-brand text-foreground':'border-transparent text-muted-foreground hover:text-foreground'}">
+      ${esc(b.brand)}${b.brand===own?' ★':''}
+      <span class="text-[10px] text-muted-foreground">${b.categories||0}</span></button>`;
+  }).join('');
+  const cmpOn = activeBrand === '__compare__';
+  document.getElementById('brandTabs').innerHTML = tabs +
+    `<button onclick="selectBrand('__compare__')"
+      class="shrink-0 px-3 py-2 text-sm font-medium border-b-2 -mb-px ${cmpOn?'border-brand text-foreground':'border-transparent text-muted-foreground hover:text-foreground'}">Compare all</button>`;
+}
+
+function selectBrand(b){
+  activeBrand = decodeURIComponent(b);
+  renderTabs();
+  loadBrand();
+}
+
+async function loadBrand(){
+  renderChips();
+  const pane = document.getElementById('brandPane');
+  const cmp = document.getElementById('comparePane');
+  if (activeBrand === '__compare__'){
+    pane.classList.add('hidden'); cmp.classList.remove('hidden');
+    return loadCompare();
+  }
+  pane.classList.remove('hidden'); cmp.classList.add('hidden');
+  if (!activeBrand){ pane.innerHTML = ''; return; }
+
+  const qs = new URLSearchParams({report_id: reportId(), brand: activeBrand,
+    polarity: polarity(), platforms: sel.platforms.join(','),
+    months: sel.months.join(','), sort: document.getElementById('sortSel').value,
+    min_share: document.getElementById('minShareSel').value});
+  const r = await fetch(`${API.brand}?${qs}`);
+  const d = await r.json();
+  if (d.error){ pane.innerHTML = `<div class="text-sm text-muted-foreground">${esc(d.error)}</div>`; return; }
+
+  const own = ctx.own_brand;
+  const isOwn = activeBrand === own;
+  const verb = polarity()==='strength' ? 'is better for' : 'is NOT chosen for';
+  const info = ((ctx.brands||[]).find(b=>b.brand===activeBrand)) || {};
+
+  if (!d.categories.length){
+    pane.innerHTML = `<section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
+      No positioning categories for <b class="text-foreground">${esc(activeBrand)}</b>${polarity()==='weakness'?" in the \\"not chosen for\\" view":''} yet.
+      ${info.mentions ? `It's mentioned in ${fmt(info.mentions)} stored answers${info.read?`, ${fmt(info.read)} read`:''} —
+        open <b>Report settings</b> and click <b>Analyse selected brands</b>.` : 'No stored answer mentions this brand.'}</section>`;
+    return;
+  }
+
+  pane.innerHTML = `
+    <header class="flex flex-col gap-1">
+      <h2 class="text-xl font-bold text-foreground">What ${esc(activeBrand)} ${verb}</h2>
+      <p class="text-sm text-muted-foreground">
+        ${fmt(d.n_categories)} categor${d.n_categories===1?'y':'ies'} from ${fmt(d.total_claims)} claim${d.total_claims===1?'':'s'}
+        across ${fmt(info.read||0)} answers read${d.filtered?' (filtered)':''}.
+        ${d.n_hidden?`<button onclick="showAllCats()" class="underline">+${fmt(d.n_hidden)} smaller categor${d.n_hidden===1?'y':'ies'} hidden</button>.`:''}
+        ${isOwn?'<span class="text-foreground">This is your brand.</span>':''}
+      </p>
+    </header>` +
+    d.categories.map((c,i) => catCard(c, i, isOwn)).join('');
+}
+
+function catCard(c, i, isOwn){
+  const w = Math.max(3, c.share);
+  return `<section class="bg-card border border-border rounded-xl p-4 flex flex-col gap-2">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <button onclick="openCat('${c.category_key}')" class="text-left group">
+          <h3 class="text-base font-semibold text-foreground group-hover:underline">${i+1}. ${esc(c.label)}</h3>
+        </button>
+        ${c.summary?`<p class="text-xs text-muted-foreground mt-0.5">${esc(c.summary)}</p>`:''}
+      </div>
+      <div class="text-right shrink-0">
+        <div class="text-lg font-bold ${isOwn?'text-foreground':'text-blue-600 dark:text-blue-400'}">${c.share}%</div>
+        <div class="text-[11px] text-muted-foreground">${fmt(c.n_claims)} claims</div>
+      </div>
+    </div>
+    <div class="bar"><span class="${isOwn?'fill-own':'fill-comp'}" style="width:${w}%"></span></div>
+    <div class="text-[11px] text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
+      <span>${fmt(c.n_responses)} distinct answers</span>
+      ${c.platforms.slice(0,4).map(p=>`<span>${p.label} ${p.n}</span>`).join('')}
+      ${c.versus.length?`<span>vs ${c.versus.map(v=>esc(v.brand)+' ('+v.n+')').join(', ')}</span>`:''}
+    </div>
+    ${c.examples.length?`<blockquote class="text-xs border-l-2 border-border pl-2 text-muted-foreground italic">
+      “${markBrands(c.examples[0].evidence, ctx.own_brand)}”</blockquote>`:''}
+    <button onclick="openCat('${c.category_key}')" class="self-start text-[11px] underline text-muted-foreground hover:text-foreground">
+      See all ${fmt(c.n_claims)} claims</button>
+  </section>`;
+}
+
+async function loadCompare(){
+  const r = await fetch(`${API.compare}?report_id=${encodeURIComponent(reportId())}&polarity=${polarity()}`);
+  const d = await r.json();
+  const verb = polarity()==='strength' ? 'better for' : 'not chosen for';
+  const pane = document.getElementById('comparePane');
+  const withCats = (d.brands||[]).filter(b=>b.categories.length);
+  if (!withCats.length){
+    pane.innerHTML = `<section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
+      Nothing grouped yet. Analyse at least one brand in <b>Report settings</b>.</section>`;
+    return;
+  }
+  pane.innerHTML = `
+    <header><h2 class="text-xl font-bold text-foreground">Who is ${verb} what</h2>
+      <p class="text-sm text-muted-foreground">Each brand's top categories side by side. Your brand first.</p></header>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">` +
+    withCats.map(b => `
+      <section class="bg-card border border-border rounded-xl p-4 flex flex-col gap-2">
+        <div class="flex items-baseline justify-between gap-2">
+          <h3 class="text-base font-semibold ${b.is_own?'text-foreground':'text-blue-600 dark:text-blue-400'}">
+            ${esc(b.brand)}${b.is_own?' ★':''}</h3>
+          <span class="text-[11px] text-muted-foreground">${fmt(b.total_claims)} claims</span>
+        </div>
+        <ol class="flex flex-col gap-1.5">
+          ${b.categories.map((c,i)=>`<li class="text-xs">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="text-foreground">${i+1}. ${esc(c.label)}</span>
+              <span class="text-muted-foreground shrink-0">${c.share}%</span>
+            </div>
+            <div class="bar mt-0.5"><span class="${b.is_own?'fill-own':'fill-comp'}" style="width:${Math.max(3,c.share)}%"></span></div>
+          </li>`).join('')}
+        </ol>
+        <button onclick="selectBrand('${encodeURIComponent(b.brand)}')"
+          class="self-start text-[11px] underline text-muted-foreground hover:text-foreground">Open ${esc(b.brand)}</button>
+      </section>`).join('') + `</div>`;
+}
+
+async function openCat(key){
+  const modal = document.getElementById('catModal');
+  document.getElementById('catLabel').textContent = 'loading…';
+  document.getElementById('catBody').innerHTML = '';
+  document.getElementById('catSummary').textContent = '';
+  modal.classList.remove('hidden');
+  const qs = new URLSearchParams({report_id: reportId(), brand: activeBrand,
+    polarity: polarity(), category_key: key,
+    platforms: sel.platforms.join(','), months: sel.months.join(',')});
+  const r = await fetch(`${API.category}?${qs}`);
+  const d = await r.json();
+  document.getElementById('catMeta').textContent =
+    `${activeBrand} · ${polarity()==='strength'?'better for':'not chosen for'} · ${(d.claims||[]).length} claims`;
+  document.getElementById('catLabel').textContent = d.label || '';
+  document.getElementById('catSummary').textContent = d.summary || '';
+  document.getElementById('catBody').innerHTML = (d.claims||[]).map(c => `
+    <div class="rounded-lg border border-border p-3 flex flex-col gap-1.5">
+      <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span class="px-2 py-0.5 rounded-full bg-muted text-foreground">${c.snapshot_date||c.snapshot_month}</span>
+        <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${esc(c.platform_label)}</span>
+        <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${esc(c.phrase)}</span>
+        ${(c.versus||[]).map(v=>`<span class="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">vs ${esc(v)}</span>`).join('')}
+      </div>
+      <div class="text-[11px] text-muted-foreground">Prompt: ${esc(c.question)}</div>
+      <blockquote class="text-xs border-l-2 border-border pl-2 text-foreground italic">
+        “${markBrands(c.evidence, ctx.own_brand)}”</blockquote>
+    </div>`).join('') || '<div class="text-sm text-muted-foreground">No claims under the current filters.</div>';
+}
+function closeCat(){ document.getElementById('catModal').classList.add('hidden'); }
+
+function showAllCats(){
+  document.getElementById('minShareSel').value = '0';
+  loadBrand();
+}
+
+// ------------------------------------------------------------------- jobs
+async function startExtract(all){
+  const brands = all ? (ctx.brands||[]).map(b=>b.brand) : pickedBrands();
+  if (!brands.length){ alert('Tick at least one brand under Analysis coverage.'); return; }
+  const r = await fetch(API.extract, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({report_id: reportId(), brands, also_group: true})});
+  const d = await r.json();
+  if (d.job_id) watchJob(d.job_id);
+}
+
+async function startGroup(){
+  const brands = pickedBrands();
+  if (!brands.length){ alert('Tick at least one brand under Analysis coverage.'); return; }
+  const r = await fetch(API.group, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({report_id: reportId(), brands})});
+  const d = await r.json();
+  if (d.job_id) watchJob(d.job_id);
+}
+
+function watchJob(id){
+  jobId = id;
+  document.getElementById('jobBox').classList.remove('hidden');
+  if (jobTimer) clearInterval(jobTimer);
+  jobTimer = setInterval(pollJob, 2500);
+  pollJob();
+}
+
+async function pollJob(){
+  if (!jobId) return;
+  const r = await fetch(`${API.job}?job_id=${jobId}`);
+  const d = await r.json();
+  document.getElementById('jobStage').textContent = d.stage || d.status;
+  const pct = d.total ? Math.min(100, Math.round(100*d.done/d.total)) : (d.status==='done'?100:8);
+  document.getElementById('jobBar').style.width = pct + '%';
+  document.getElementById('jobLog').textContent = (d.log||[]).join('\n');
+  if (d.status === 'done' || d.status === 'error'){
+    clearInterval(jobTimer); jobTimer = null;
+    if (d.error) document.getElementById('jobStage').textContent = 'Error: ' + d.error;
+    jobId = null;
+    await loadContext();
+    setTimeout(()=>document.getElementById('jobBox').classList.add('hidden'), d.error?15000:4000);
+  }
+}
+
+async function cancelJob(){
+  if (!jobId) return;
+  await fetch(API.cancel, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({job_id: jobId})});
+}
+
+(async function(){
+  if (!REPORTS.length) return;
+  await loadContext();
+  const r = await fetch(API.active); const d = await r.json();
+  if ((d.jobs||[]).length) watchJob(d.jobs[0].job_id);
+  const anyCats = (ctx.brands||[]).some(b=>b.categories>0);
+  if (!anyCats) document.getElementById('settingsBody').classList.remove('hidden');
+})();
+</script>
+{% endblock %}
