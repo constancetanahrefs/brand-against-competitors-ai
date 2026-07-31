@@ -64,14 +64,19 @@
 <div class="flex flex-col gap-4" id="app">
 
   <!-- ======================================================= REPORT TITLE -->
-  <div class="flex flex-wrap items-baseline justify-between gap-2">
-    <h1 class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
+  <a href="/reports/" class="text-xs text-muted-foreground hover:text-foreground no-underline w-fit">&larr; All reports</a>
+
+  <div class="flex flex-col gap-1">
+    <h1 id="reportTitle" class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
       What AI says about your brand against competitors
     </h1>
-    <a href="/reports/brand_positioning/" class="text-xs underline text-muted-foreground hover:text-foreground shrink-0">
-      What each brand is better for →
-    </a>
+    <p id="reportBrands" class="text-sm text-muted-foreground"></p>
   </div>
+
+  <nav class="flex items-end gap-1 border-b border-border -mb-px" aria-label="Views">
+    <a href="{{ sentiment_url }}" class="px-3 sm:px-4 py-2 text-sm font-semibold rounded-t-lg border border-border border-b-transparent bg-card text-foreground relative top-px">Sentiment<span class="hidden sm:inline"> &amp; criticism</span></a>
+    <a href="{{ positioning_url }}" class="px-3 sm:px-4 py-2 text-sm font-medium rounded-t-lg text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent">What each brand is better for</a>
+  </nav>
 
   <!-- ============================================================ SETTINGS -->
   <section class="bg-card border border-border rounded-xl">
@@ -715,6 +720,17 @@ function render(){
   document.getElementById('eyebrow').textContent =
     ['AI VISIBILITY', platLabel.toUpperCase(), dsTxt, cTxt].join(' · ');
   document.getElementById('pageTitle').textContent = `What ${platLabel} says about ${s}`;
+
+  // h1 names the brands under comparison: subject vs the other tracked entities
+  const ents = (ctx.entities || []).map(e => e.name).filter(n => n && n !== s);
+  const h1El = document.getElementById('reportTitle');
+  const h1Sub = document.getElementById('reportBrands');
+  if (h1El) h1El.textContent = ents.length
+    ? `${s} vs ${ents.slice(0,3).join(', ')}${ents.length>3?` +${ents.length-3} more`:''}`
+    : `${s} — AI visibility`;
+  if (h1Sub) h1Sub.textContent = ents.length
+    ? `What AI says about ${s} against ${ents.length} tracked competitor${ents.length===1?'':'s'}.`
+    : `What AI says about ${s}.`;
 
   const w = view.window || {};
   const nP = view.n_prompts_total;
