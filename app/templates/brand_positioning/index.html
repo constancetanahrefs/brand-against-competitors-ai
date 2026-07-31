@@ -23,20 +23,25 @@
 {% block content %}
 <div class="flex flex-col gap-4" id="app">
 
-  <h1 class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
-    What each brand is better for
-  </h1>
-  <p class="text-sm text-muted-foreground -mt-2">
-    Semantic positioning categories extracted from the same AI answers as
-    <a href="{{ sentiment_url }}" class="underline text-foreground">What AI says about your brand against competitors</a>.
-    No new data is fetched here.
-  </p>
+  <a href="/reports/" class="text-xs text-muted-foreground hover:text-foreground no-underline w-fit">&larr; All reports</a>
+
+  <div class="flex flex-col gap-1">
+    <h1 id="reportTitle" class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
+      What AI says about your brand against competitors
+    </h1>
+    <p id="reportBrands" class="text-sm text-muted-foreground"></p>
+  </div>
+
+  <nav class="flex items-end gap-1 border-b border-border -mb-px" aria-label="Views">
+    <a href="{{ sentiment_url }}" class="px-3 sm:px-4 py-2 text-sm font-medium rounded-t-lg text-muted-foreground hover:text-foreground hover:bg-muted border border-transparent">Sentiment<span class="hidden sm:inline"> &amp; criticism</span></a>
+    <a href="{{ positioning_url }}" class="px-3 sm:px-4 py-2 text-sm font-semibold rounded-t-lg border border-border border-b-transparent bg-card text-foreground relative top-px">What each brand is better for</a>
+  </nav>
 
   {% if not reports %}
   <section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
-    No AI answers are stored yet. Fetch some in
-    <a href="{{ sentiment_url }}" class="underline text-foreground">the sentiment report</a> first —
-    this report reads the same database.
+    No AI answers are stored yet. Fetch some in the
+    <a href="{{ sentiment_url }}" class="underline text-foreground">Sentiment &amp; criticism</a> tab first —
+    this view reads the same database.
   </section>
   {% else %}
 
@@ -54,7 +59,7 @@
       <div class="flex flex-col gap-1.5">
         <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
           Brand Radar report
-          {{ tip("Only reports whose AI answers are already stored appear here. To add a report, fetch it in the sentiment report first — both reports read the same raw answers.") }}
+          {{ tip("Only reports whose AI answers are already stored appear here. To add a report, fetch it in the <b>Sentiment &amp; criticism</b> tab first — both tabs read the same raw answers.") }}
         </label>
         <select id="reportSel" onchange="onReportChange()"
                 class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
@@ -155,7 +160,7 @@
     <button onclick="document.getElementById('method').classList.toggle('hidden')"
             class="text-sm font-medium text-foreground">How this is calculated ▾</button>
     <div id="method" class="hidden mt-3 text-xs text-muted-foreground flex flex-col gap-2">
-      <p><b class="text-foreground">Same source, no new fetch.</b> This report reads the AI answers already stored by the sentiment report. Nothing is pulled from Brand Radar here, so adding a report means fetching it there first.</p>
+      <p><b class="text-foreground">Same source, no new fetch.</b> Both tabs of this report read one shared store of AI answers. This tab pulls nothing from Brand Radar itself, so adding a report means fetching it in the <b>Sentiment &amp; criticism</b> tab first.</p>
       <p><b class="text-foreground">Stage 1 — extract claims.</b> For every stored answer that mentions a brand, ±420 characters around each mention (up to 3 excerpts) go to <code>gemini-3-flash</code> in batches of 8. The model returns only <i>explicit</i> positioning claims — "better for backlink analysis", "too expensive for solo users" — each with a <b>verbatim evidence span</b> and any brands it was contrasted against. A bare mention in a list is not a claim. Answers that yield nothing are recorded as read, so they're never re-sent. Cached per (answer, brand).</p>
       <p><b class="text-foreground">Stage 2 — group semantically.</b> Claim phrases are deduped, embedded (<code>text-embedding-3-small</code>) and merged by cosine similarity, most-common phrasing first so groups are stable across re-runs. Then <code>claude-sonnet</code> <i>labels</i> the groups — it names them, it doesn't decide the grouping. A group needs at least 2 claims to become a category.</p>
       <p><b class="text-foreground">Why two stages.</b> Extraction is the expensive part and is per-answer, so it caches perfectly. Grouping needs to see all claims at once and is cheap, so you can re-group after a new month — or at a different similarity threshold — without paying to re-read anything.</p>
@@ -185,17 +190,7 @@
 
 {% block scripts %}
 <script>
-const API = {
-  ctx:      "{{ url_for('brand_positioning.api_context') }}",
-  brand:    "{{ url_for('brand_positioning.api_brand') }}",
-  category: "{{ url_for('brand_positioning.api_category') }}",
-  compare:  "{{ url_for('brand_positioning.api_compare') }}",
-  extract:  "{{ url_for('brand_positioning.api_extract') }}",
-  group:    "{{ url_for('brand_positioning.api_group') }}",
-  job:      "{{ url_for('brand_positioning.api_job') }}",
-  cancel:   "{{ url_for('brand_positioning.api_job_cancel') }}",
-  active:   "{{ url_for('brand_positioning.api_jobs_active') }}",
-};
+const API = {{ api|tojson }};
 const PLABEL = {{ platform_labels|tojson }};
 const REPORTS = {{ reports|tojson }};
 
@@ -243,6 +238,7 @@ async function loadContext(){
     : '<span class="text-muted-foreground">nothing analysed yet</span>';
 
   syncSel();
+  renderTitle();
   renderCoverage();
   renderTabs();
   await loadBrand();
@@ -266,6 +262,23 @@ function renderChips(){
   ];
   document.getElementById('chips').innerHTML = c.map(([k,v]) =>
     `<span class="chip px-2 py-0.5 rounded-full bg-muted"><b class="text-foreground font-medium">${esc(k)}</b><span class="text-muted-foreground">${esc(v)}</span></span>`).join('');
+}
+
+// Title names the brands actually being compared — the whole point of the report
+// is "us vs them", so the reader should see who "them" is without opening settings.
+function renderTitle(){
+  const bs = (ctx && ctx.brands) || [];
+  const own = ctx.own_brand || '';
+  const rivals = bs.filter(b => b.brand !== own && b.claims > 0).map(b => b.brand);
+  const t = document.getElementById('reportTitle');
+  const sub = document.getElementById('reportBrands');
+  if (!own){ t.textContent = 'What AI says about your brand against competitors'; sub.textContent=''; return; }
+  t.textContent = rivals.length
+    ? `${own} vs ${rivals.slice(0,3).join(', ')}${rivals.length>3?` +${rivals.length-3} more`:''}`
+    : `${own} — no competitor analysed yet`;
+  const un = bs.filter(b => b.brand !== own && !b.claims).length;
+  sub.innerHTML = `What AI says each brand is better for, from the same stored answers.` +
+    (un ? ` <span class="text-muted-foreground">${un} more competitor${un===1?'':'s'} tracked but not analysed.</span>` : '');
 }
 
 function renderCoverage(){
@@ -343,7 +356,7 @@ async function loadBrand(){
 
   if (!d.categories.length){
     pane.innerHTML = `<section class="bg-card border border-border rounded-xl p-6 text-sm text-muted-foreground">
-      No positioning categories for <b class="text-foreground">${esc(activeBrand)}</b>${polarity()==='weakness'?" in the \\"not chosen for\\" view":''} yet.
+      No positioning categories for <b class="text-foreground">${esc(activeBrand)}</b>${polarity()==='weakness'?' in the &ldquo;not chosen for&rdquo; view':''} yet.
       ${info.mentions ? `It's mentioned in ${fmt(info.mentions)} stored answers${info.read?`, ${fmt(info.read)} read`:''} —
         open <b>Report settings</b> and click <b>Analyse selected brands</b>.` : 'No stored answer mentions this brand.'}</section>`;
     return;
@@ -455,6 +468,10 @@ async function openCat(key){
     </div>`).join('') || '<div class="text-sm text-muted-foreground">No claims under the current filters.</div>';
 }
 function closeCat(){ document.getElementById('catModal').classList.add('hidden'); }
+window.bpEscBound = true;
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('catModal').classList.contains('hidden')) closeCat();
+});
 
 function showAllCats(){
   document.getElementById('minShareSel').value = '0';
