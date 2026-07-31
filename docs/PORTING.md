@@ -93,6 +93,19 @@ These are the parts of this app that aren't a Brand Radar feature:
 5. **Criticism intensity, trend, movers.** All derived in SQL from the stored
    verdicts.
 
+## One report per project
+
+Each report is pinned to a single Brand Radar report UUID, closed over at
+construction time and never read from the request. If you rebuild this, keep that
+property: a report id arriving in a query string is a cross-tenant data leak
+waiting to happen, and "filter by the id the client sent" is exactly the bug we
+had to remove. Scope background-job listings by the same pinned id, or one
+project's jobs show up in another's UI.
+
+The shape that worked: one factory function returning a blueprint, plus a tiny
+per-project wrapper module that supplies `(report_id, title, slug)`. Adding a
+project is one file; the routes, SQL and templates are shared.
+
 ## One API token is not always enough
 
 Brand Radar reports are scoped to an Ahrefs workspace. A user in several
