@@ -21,7 +21,42 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy import select, func, delete
 
-from src.connectors import ahrefs, ConnectorError
+from src.connectors import invoke as _invoke, ahrefs as _ahrefs_default, ConnectorError
+
+# A workspace can hold more than one Ahrefs OAuth token, and different tokens
+# expose DIFFERENT, non-overlapping sets of Brand Radar reports (one per Ahrefs
+# workspace the user belongs to). So every call must use the token that can
+# actually see the report — resolved per report_id, never a global constant.
+# List every secret name you have here; refresh_reports() walks them all and
+# records which one returned each report.
+AHREFS_SECRETS = ["ahrefs_oauth", "ahrefs_oauth_2"]
+_secret_cache: dict[str, str] = {}
+
+
+def secret_for(report_id: str | None) -> str:
+    """Which OAuth secret can see this report. Falls back to the primary token."""
+    if not report_id:
+        return AHREFS_SECRETS[0]
+    if report_id in _secret_cache:
+        return _secret_cache[report_id]
+    sec = AHREFS_SECRETS[0]
+    try:
+        with session_scope() as s:
+            row = s.scalar(select(BasReport).where(BasReport.report_id == report_id))
+            if row and getattr(row, "secret", None):
+                sec = row.secret
+    except Exception:
+        pass
+    _secret_cache[report_id] = sec
+    return sec
+
+
+def ahrefs(cap_id: str, args: dict, *, timeout: int = 90,
+           full_payload: bool = True, secret: str | None = None) -> dict:
+    """Ahrefs call bound to the token that owns the report named in `args`."""
+    sec = secret or secret_for(args.get("report_id"))
+    return _invoke(cap_id, args, secret=sec, timeout=timeout,
+                   full_payload=full_payload)
 from src.db import session_scope
 from src.llm import console_openai_client
 
@@ -96,13 +131,13 @@ def cutoff_date(window_months: int) -> str:
 
 
 def _ahrefs_retry(cap: str, args: dict, *, timeout: int = 300, tries: int = 4,
-                  job_id: str | None = None) -> dict:
+                  job_id: str | None = None, secret: str | None = None) -> dict:
     """Brand Radar occasionally answers a page with a transient 500 (observed on
     long paginated pulls). Retry with backoff so an unattended run survives it."""
     last: Exception | None = None
     for attempt in range(1, tries + 1):
         try:
-            return ahrefs(cap, args, timeout=timeout)
+            return ahrefs(cap, args, timeout=timeout, secret=secret)
         except ConnectorError as e:
             last = e
             msg = str(e).lower()
@@ -172,27 +207,42 @@ def job_cancelled(job_id: str) -> bool:
 
 # ------------------------------------------------------------ report catalogue
 def refresh_reports(limit: int = 100) -> int:
-    """Cache the workspace's Brand Radar reports (config only — cheap)."""
-    res = ahrefs("ahrefs_brand_radar.get_reports", {"limit": limit}, timeout=120)
-    recs = res.get("records") or []
+    """Cache every Brand Radar report visible to ANY of our Ahrefs tokens.
+
+    The tokens see different workspaces, so we walk them all and stamp each row
+    with the secret that returned it — that's what later calls authenticate with.
+    First token to return a report wins (they don't overlap in practice).
+    """
     n = 0
-    with session_scope() as s:
-        for rec in recs:
-            rid = rec.get("id")
-            if not rid:
-                continue
-            row = s.scalar(select(BasReport).where(BasReport.report_id == rid))
-            if not row:
-                row = BasReport(report_id=rid)
-                s.add(row)
-            row.name = rec.get("name") or "(untitled report)"
-            row.owner = ((rec.get("owner") or {}).get("name") or "")
-            row.brands = [_entity(b) for b in (rec.get("brands") or [])]
-            row.competitors = [_entity(b) for b in (rec.get("competitors") or [])]
-            row.niche = [_entity(b) for b in (rec.get("niche") or [])]
-            row.countries = ((rec.get("filters") or {}).get("countries") or [])
-            row.refreshed_at = _now()
-            n += 1
+    seen: set[str] = set()
+    for sec in AHREFS_SECRETS:
+        try:
+            res = _invoke("ahrefs_brand_radar.get_reports", {"limit": limit},
+                          secret=sec, timeout=120)
+        except ConnectorError as e:
+            print(f"[bas] get_reports failed for {sec}: {e}")
+            continue
+        recs = res.get("records") or []
+        with session_scope() as s:
+            for rec in recs:
+                rid = rec.get("id")
+                if not rid or rid in seen:
+                    continue
+                seen.add(rid)
+                row = s.scalar(select(BasReport).where(BasReport.report_id == rid))
+                if not row:
+                    row = BasReport(report_id=rid)
+                    s.add(row)
+                row.name = rec.get("name") or "(untitled report)"
+                row.owner = ((rec.get("owner") or {}).get("name") or "")
+                row.brands = [_entity(b) for b in (rec.get("brands") or [])]
+                row.competitors = [_entity(b) for b in (rec.get("competitors") or [])]
+                row.niche = [_entity(b) for b in (rec.get("niche") or [])]
+                row.countries = ((rec.get("filters") or {}).get("countries") or [])
+                row.secret = sec
+                row.refreshed_at = _now()
+                n += 1
+        _secret_cache.clear()
     return n
 
 
@@ -209,6 +259,7 @@ def load_report(report_id: str) -> dict | None:
             "custom_prompt_countries": r.custom_prompt_countries or [],
             "probe": r.probe or {},
             "probed_at": r.probed_at.isoformat() if r.probed_at else None,
+            "secret": getattr(r, "secret", None) or AHREFS_SECRETS[0],
         }
 
 
