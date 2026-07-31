@@ -45,6 +45,10 @@ class BasReport(Base):
     competitors: Mapped[list] = mapped_column(JSONB, default=list)
     niche: Mapped[list] = mapped_column(JSONB, default=list)
     countries: Mapped[list] = mapped_column(JSONB, default=list)    # report's own country filter
+    # Which Ahrefs OAuth secret can SEE this report. The workspace has more than
+    # one token and they expose DIFFERENT report sets, so this is per-report, not
+    # a global constant. refresh_reports() stamps it as it walks each token.
+    secret: Mapped[str] = mapped_column(String(64), default="ahrefs_oauth")
     n_custom_prompts: Mapped[int] = mapped_column(Integer, default=0)
     custom_prompt_countries: Mapped[list] = mapped_column(JSONB, default=list)
     probe: Mapped[dict] = mapped_column(JSONB, default=dict)        # {"custom":{"chatgpt":9848,...},"public":{...}}
