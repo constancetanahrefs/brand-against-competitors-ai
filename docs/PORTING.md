@@ -93,6 +93,15 @@ These are the parts of this app that aren't a Brand Radar feature:
 5. **Criticism intensity, trend, movers.** All derived in SQL from the stored
    verdicts.
 
+## One API token is not always enough
+
+Brand Radar reports are scoped to an Ahrefs workspace. A user in several
+workspaces has several credentials, and `GET /v3/brand-radar/reports` returns
+only the reports the presented token can see. If you rebuild this on the public
+API, treat "which credential owns this report" as part of the report's identity
+and persist it — otherwise a perfectly valid report id will 404 for no visible
+reason.
+
 ## The positioning report needs no extra Ahrefs endpoints
 
 Report 2 ("What each brand is better for") reads the answers report 1 already
