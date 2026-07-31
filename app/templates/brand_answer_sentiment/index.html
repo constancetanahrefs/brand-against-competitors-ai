@@ -1,0 +1,1339 @@
+{% extends "base.html" %}
+{% block title %}What AI says about your brand against competitors{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<style>
+  .bas-bar { display:flex; height:6px; border-radius:999px; overflow:hidden; background:oklch(var(--muted)); }
+  .bas-bar > span { display:block; height:100%; }
+  .v-negative { background:#f43f5e; } .v-mixed { background:#f59e0b; }
+  .v-neutral  { background:#cbd5e1; } .v-positive { background:#10b981; }
+  .v-absent   { background:#475569; }
+  .t-negative { color:#e11d48; } .t-mixed { color:#d97706; }
+  .t-neutral  { color:#64748b; } .t-positive { color:#059669; }
+  .t-absent   { color:#475569; }
+  .bas-answer { max-height:22rem; overflow:auto; word-break:break-word; }
+  /* Markdown rendering of AI answers. Tailwind resets heading/list styles, so the
+     answer body needs its own typography rules. */
+  .md { line-height:1.55; }
+  .md > :first-child { margin-top:0; }
+  .md p, .md ul, .md ol, .md blockquote, .md pre, .md table { margin:.5rem 0; }
+  .md h1, .md h2, .md h3, .md h4 { font-weight:600; color:oklch(var(--foreground)); margin:.85rem 0 .35rem; line-height:1.3; }
+  .md h1 { font-size:1.05rem; } .md h2 { font-size:1rem; }
+  .md h3 { font-size:.95rem; } .md h4 { font-size:.9rem; }
+  .md ul { list-style:disc; padding-left:1.15rem; }
+  .md ol { list-style:decimal; padding-left:1.35rem; }
+  .md li { margin:.15rem 0; }
+  .md li > ul, .md li > ol { margin:.15rem 0; }
+  .md strong { font-weight:600; color:oklch(var(--foreground)); }
+  .md em { font-style:italic; }
+  .md a { text-decoration:underline; }
+  .md code { font-family:ui-monospace,monospace; font-size:.92em; background:oklch(var(--muted)); padding:.05rem .25rem; border-radius:.2rem; }
+  .md pre { background:oklch(var(--muted)); padding:.5rem; border-radius:.35rem; overflow-x:auto; }
+  .md pre code { background:none; padding:0; }
+  .md blockquote { border-left:2px solid oklch(var(--border)); padding-left:.6rem; color:oklch(var(--muted-foreground)); }
+  .md hr { border:0; border-top:1px solid oklch(var(--border)); margin:.75rem 0; }
+  .md table { border-collapse:collapse; width:100%; display:block; overflow-x:auto; }
+  .md th, .md td { border:1px solid oklch(var(--border)); padding:.25rem .4rem; text-align:left; }
+  .md th { background:oklch(var(--muted)); font-weight:600; }
+  .md img { max-width:100%; height:auto; border-radius:.35rem; }
+  /* Brand highlighting inside answers */
+  mark.bh { padding:.05rem .2rem; border-radius:.2rem; font-weight:600; }
+  mark.bh-subject   { background:#fde68a; color:#78350f; box-shadow:inset 0 0 0 1px #f59e0b40; }
+  mark.bh-competitor{ background:#dbeafe; color:#1e3a8a; box-shadow:inset 0 0 0 1px #3b82f640; }
+  mark.bh-niche     { background:#ede9fe; color:#4c1d95; box-shadow:inset 0 0 0 1px #8b5cf640; }
+  .chip { display:inline-flex; align-items:center; gap:.25rem; }
+  details.prow > summary { list-style:none; cursor:pointer; }
+  details.prow > summary::-webkit-details-marker { display:none; }
+  details.prow[open] .caret { transform:rotate(90deg); }
+  /* explicit rule: the Tailwind CDN build doesn't always ship line-clamp */
+  .line-clamp-2 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  #browseRows td { vertical-align:top; }
+</style>
+{% endblock %}
+
+{% macro tip(text) -%}
+<span class="relative group inline-block align-middle">
+  <span class="cursor-help text-muted-foreground text-xs">&#9432;</span>
+  <span class="absolute bottom-full mb-1 left-0 hidden group-hover:block z-50 bg-card border border-border rounded-lg shadow-lg p-2.5 text-[11px] leading-snug text-foreground w-60 normal-case font-normal">{{ text|safe }}</span>
+</span>
+{%- endmacro %}
+
+{% block content %}
+<div class="flex flex-col gap-4" id="app">
+
+  <!-- ======================================================= REPORT TITLE -->
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h1 class="text-2xl sm:text-3xl font-bold text-foreground leading-tight">
+      What AI says about your brand against competitors
+    </h1>
+    <a href="/reports/brand_positioning/" class="text-xs underline text-muted-foreground hover:text-foreground shrink-0">
+      What each brand is better for →
+    </a>
+  </div>
+
+  <!-- ============================================================ SETTINGS -->
+  <section class="bg-card border border-border rounded-xl">
+    <button onclick="toggleSettings()" class="w-full flex items-start justify-between gap-3 p-4 text-left">
+      <div class="min-w-0">
+        <div class="text-xs uppercase tracking-wide text-muted-foreground">Report settings</div>
+        <div id="chips" class="mt-2 flex flex-wrap gap-1.5 text-xs"></div>
+      </div>
+      <span id="settingsCaret" class="text-muted-foreground text-sm shrink-0 mt-1">▾</span>
+    </button>
+
+    <div id="settingsBody" class="hidden border-t border-border p-4 flex flex-col gap-4">
+
+      <!-- report -->
+      <div class="flex flex-col gap-1.5">
+        <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Brand Radar report
+          {{ tip("Every report in your Ahrefs workspace. Reports with data already stored here are listed first. Picking a report re-reads its own brand, competitors and country filter.") }}
+        </label>
+        <select id="reportSel" onchange="onReportChange()"
+                class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2 focus:outline-none focus:ring-1 focus:ring-ring">
+          {% for r in reports %}
+          <option value="{{ r.report_id }}">{{ r.name }}{% if r.n_stored %} — {{ "{:,}".format(r.n_stored) }} stored{% elif r.n_custom_prompts %} — {{ r.n_custom_prompts }} prompts{% endif %}</option>
+          {% endfor %}
+        </select>
+        <div class="flex flex-wrap gap-2 pt-1">
+          <button onclick="refreshReports()" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Refresh report list</button>
+          <button onclick="probeReport()" id="probeBtn" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Check available data</button>
+          <span id="reportMeta" class="text-xs text-muted-foreground self-center"></span>
+        </div>
+      </div>
+
+      <!-- subject -->
+      <div class="flex flex-col gap-1.5">
+        <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Subject brand
+          {{ tip("Who the report is about. Any brand tracked in the report can be the subject — your own brand or a competitor, so you can produce 'What ChatGPT says about &lt;competitor&gt;'. Mentions are detected for every brand at fetch time; only the sentiment verdicts are per subject.") }}
+        </label>
+        <select id="subjectSel" onchange="onSubjectChange()"
+                class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2 focus:outline-none focus:ring-1 focus:ring-ring"></select>
+      </div>
+
+      <!-- platforms -->
+      <div class="flex flex-col gap-1.5">
+        <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          AI platforms
+          {{ tip("Which AI surfaces to include. The count is how many responses are stored locally for this report; 'not fetched' means Brand Radar has rows but we haven't pulled them yet. Google AI Overviews / AI Mode only have history from ~March 2026.") }}
+        </div>
+        <div id="platformBoxes" class="grid grid-cols-1 sm:grid-cols-2 gap-1.5"></div>
+      </div>
+
+      <!-- dataset + window -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Prompt dataset
+            {{ tip("Custom queries = the prompts you added to this Brand Radar report. Public queries = Ahrefs' public prompt index (much larger, workspace-wide). Pick either or both.") }}
+          </div>
+          <div id="datasetBoxes" class="flex flex-col gap-1.5"></div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Fetch window
+            {{ tip("How far back to pull when fetching from Brand Radar. Only affects new fetches — rows already stored stay stored. Use the Months filter below to narrow what the page shows.") }}
+          </label>
+          <select id="windowSel" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+            <option value="3" selected>Last 3 months</option>
+            <option value="6">Last 6 months</option>
+            <option value="12">Last 12 months</option>
+            <option value="0">All available history</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- country + months -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Countries
+            {{ tip("The country of the underlying search query. Fetches always store every country, so switching this is instant and free.") }}
+          </div>
+          <div id="countryBoxes" class="flex flex-wrap gap-1.5 text-xs"></div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Months
+            {{ tip("Snapshot months to include. Brand Radar re-asks each prompt on a schedule, so one prompt has many dated responses. Leave all selected for the full window.") }}
+          </div>
+          <div id="monthBoxes" class="flex flex-wrap gap-1.5 text-xs"></div>
+        </div>
+      </div>
+
+      <!-- sort -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Sort prompts by
+            {{ tip("<b>Negative responses — most</b> is the default: prompts with the highest count of outright negative responses first. Criticism intensity = negative×2 + mixed×1 across all dated responses for that prompt, which also surfaces prompts that are heavily 'recommended-with-caveats'. <b>Most negative first</b> ranks the worst prompts to the top and hides prompts with no criticism at all. <b>Least negative first</b> flips the order <i>and</i> widens the table to include the clean prompts — otherwise the cleanest prompts, which are the real answer to ‘least negative’, would be filtered out. The table’s heading and count badge change to match.") }}
+          </label>
+          <select id="sortSel" onchange="loadView()" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+            <optgroup label="Most negative first">
+              <option value="negative_count" selected>Negative responses — most</option>
+              <option value="criticism">Criticism intensity (neg×2 + mixed) — most critical</option>
+              <option value="pct_negative">% negative — highest</option>
+            </optgroup>
+            <optgroup label="Least negative first">
+              <option value="criticism_asc">Criticism intensity — least critical</option>
+              <option value="pct_negative_asc">% negative — lowest</option>
+              <option value="negative_count_asc">Negative responses — fewest</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="search_volume">Search volume</option>
+              <option value="responses">Response count</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+            Min responses per prompt
+            {{ tip("Hide prompts with very few dated responses — they make percentages noisy.") }}
+          </label>
+          <input id="minResp" type="number" min="1" max="200" value="1" onchange="loadView()"
+                 class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 pt-1 border-t border-border">
+        <button onclick="applyFilters()" class="px-3 py-1.5 rounded-md text-sm bg-brand text-brand-foreground font-medium">Apply filters</button>
+        <button onclick="startFetch()" id="fetchBtn" class="px-3 py-1.5 rounded-md text-sm border border-border hover:border-ring">Fetch + analyse selected</button>
+      </div>
+
+      <!-- coverage / missing data -->
+      <div id="coverage" class="text-xs"></div>
+    </div>
+  </section>
+
+  <!-- job progress -->
+  <section id="jobBox" class="hidden bg-card border border-border rounded-xl p-4 flex flex-col gap-2">
+    <div class="flex items-center justify-between gap-3">
+      <div class="text-sm font-medium text-foreground" id="jobStage">working…</div>
+      <button onclick="cancelJob()" class="px-2 py-1 rounded-md text-xs border border-border hover:border-ring">Cancel</button>
+    </div>
+    <div class="h-1.5 rounded-full bg-muted overflow-hidden"><div id="jobBar" class="h-full bg-brand" style="width:0%"></div></div>
+    <pre id="jobLog" class="text-[11px] text-muted-foreground whitespace-pre-wrap max-h-32 overflow-auto"></pre>
+  </section>
+
+  <!-- ============================================================== HEADER -->
+  <header class="flex flex-col gap-2">
+    <div id="eyebrow" class="text-[11px] uppercase tracking-widest text-muted-foreground"></div>
+    <h2 id="pageTitle" class="text-xl sm:text-2xl font-bold text-foreground leading-tight">Brand Answer Sentiment</h2>
+    <p id="subtitle" class="text-sm text-muted-foreground"></p>
+    <div class="flex flex-wrap gap-1.5">
+      <span id="capturedBadge" class="hidden px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground"></span>
+      <span id="reportBadge" class="hidden px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground font-mono"></span>
+    </div>
+    <div id="warn" class="hidden text-xs rounded-lg border border-amber-300 bg-orange-500/10 text-orange-700 dark:text-orange-400 p-2.5"></div>
+  </header>
+
+  <!-- ================================================================= TABS -->
+  <nav class="flex gap-1 border-b border-border">
+    <button id="tabBtnOverview" onclick="showTab('overview')"
+            class="px-3 py-2 text-sm font-medium border-b-2 -mb-px">Overview</button>
+    <button id="tabBtnBrowse" onclick="showTab('browse')"
+            class="px-3 py-2 text-sm font-medium border-b-2 -mb-px">Browse responses</button>
+  </nav>
+
+<div id="tabOverview" class="flex flex-col gap-4">
+  <!-- ================================================================ KPIs -->
+  <section id="kpis" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></section>
+
+  <!-- =============================================================== TREND -->
+  <section id="trendCard" class="hidden bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
+    <div>
+      <h2 class="text-base font-semibold text-foreground flex items-center gap-1.5">
+        Is it getting worse?
+        {{ tip("Each point is one snapshot month under the current filters. % critical = (negative + mixed) ÷ all responses that month, so it moves when the AI's tone changes OR when the brand stops being mentioned. Mention rate is plotted separately so you can tell those apart.") }}
+      </h2>
+      <p class="text-xs text-muted-foreground mt-0.5" id="trendSub"></p>
+    </div>
+    <div id="trendChart"></div>
+    <div id="movers" class="text-xs flex flex-col gap-1.5"></div>
+  </section>
+
+  <!-- ====================================================== CRITICISM TABLE -->
+  <section class="bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 id="critTitle" class="text-base font-semibold text-foreground">Prompts where the AI criticizes the brand</h2>
+        <p class="text-xs text-muted-foreground mt-0.5 flex items-start gap-1.5">
+          <span id="critSub">Sorted by number of negative responses across all dated snapshots, most first. Click a row to see every dated response that hit it.</span>
+          {{ tip("Only prompts with at least one negative or mixed response are listed — a prompt where the brand is always praised or always absent has intensity 0 and is hidden. The badge shows how many of the report's prompts made the list.") }}
+        </p>
+      </div>
+      <span id="critBadge" class="shrink-0 px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground"></span>
+    </div>
+    <div id="critRows" class="flex flex-col divide-y divide-border"></div>
+  </section>
+
+  <!-- ======================================================== PRAISE TABLE -->
+  <section class="bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 id="praiseTitle" class="text-base font-semibold text-foreground">Prompts where the AI recommends the brand</h2>
+        <p class="text-xs text-muted-foreground mt-0.5 flex items-start gap-1.5">
+          <span>Sorted by number of positive responses. Same drill-down.</span>
+          {{ tip("The inverse ranking of the criticism table — the prompts where the subject is most consistently recommended. Useful for finding proof points and for spotting which wins are eroding.") }}
+        </p>
+      </div>
+      <span id="praiseBadge" class="shrink-0 px-2 py-0.5 rounded-full bg-muted text-[11px] text-muted-foreground"></span>
+    </div>
+    <div id="praiseRows" class="flex flex-col divide-y divide-border"></div>
+  </section>
+
+  <!-- ================================================== PLATFORM COMPARISON -->
+  <section id="platCard" class="hidden bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
+    <h2 class="text-base font-semibold text-foreground flex items-center gap-1.5">
+      By platform
+      {{ tip("The same universe split by AI surface, so you can see whether one assistant is markedly harsher or more likely to omit the brand entirely.") }}
+    </h2>
+    <div id="platRows" class="flex flex-col gap-2"></div>
+  </section>
+
+</div><!-- /tabOverview -->
+
+<!-- ============================================================== BROWSE -->
+<div id="tabBrowse" class="hidden flex flex-col gap-3">
+  <section class="bg-card border border-border rounded-xl p-4 flex flex-col gap-3">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <h2 class="text-base font-semibold text-foreground flex items-center gap-1.5">
+          Every fetched response
+          {{ tip("One row per AI answer that has been pulled from Brand Radar, newest first. The report / subject / platform / dataset / country / month choices from Report settings apply here too; the filters below narrow further. Rows are paged from the database, so this stays fast at tens of thousands of rows.") }}
+        </h2>
+        <p class="text-xs text-muted-foreground mt-0.5" id="browseCount">—</p>
+      </div>
+      <button onclick="exportBrowseCsv()" class="shrink-0 px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Copy page as CSV</button>
+    </div>
+
+    <!-- browse filters -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div class="flex flex-col gap-1.5">
+        <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Sentiment
+          {{ tip("The verdict for the subject brand on that single answer. <b>Unjudged</b> means the row is fetched but not yet classified — use Analyse in Report settings to fill those in.") }}
+        </div>
+        <div id="bVerdicts" class="flex flex-wrap gap-1.5 text-xs"></div>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Mentioned / absent
+          {{ tip("<b>Mentioned</b> = the brand appears in the answer text (whole-word alias match). <b>Absent</b> = the prompt was answered but the brand never came up. Combines with the sentiment filter.") }}
+        </div>
+        <div class="flex gap-1.5 text-xs">
+          <label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="radio" name="bMention" value="any" checked onchange="loadBrowse(0)"><span>Any</span></label>
+          <label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="radio" name="bMention" value="mentioned" onchange="loadBrowse(0)"><span>Mentioned</span></label>
+          <label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="radio" name="bMention" value="absent" onchange="loadBrowse(0)"><span>Absent</span></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div class="flex flex-col gap-1.5 sm:col-span-2">
+        <label class="text-xs font-medium text-foreground flex items-center gap-1.5">
+          Search text
+          {{ tip("Case-insensitive substring match against the prompt AND the answer text.") }}
+        </label>
+        <input id="bSearch" type="text" placeholder="prompt or answer contains…"
+               onkeydown="if(event.key==='Enter') loadBrowse(0)"
+               class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2 focus:outline-none focus:ring-1 focus:ring-ring">
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <label class="text-xs font-medium text-foreground">Sort</label>
+        <select id="bSort" onchange="loadBrowse(0)" class="w-full rounded-md border border-border bg-muted text-sm text-foreground p-2">
+          <option value="date_desc">Newest snapshot first</option>
+          <option value="date_asc">Oldest snapshot first</option>
+          <option value="volume_desc">Search volume — highest</option>
+          <option value="volume_asc">Search volume — lowest</option>
+          <option value="prompt">Prompt (A–Z)</option>
+          <option value="platform">Platform</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border">
+      <button onclick="loadBrowse(0)" class="px-3 py-1.5 rounded-md text-sm bg-brand text-brand-foreground font-medium">Apply</button>
+      <button onclick="resetBrowse()" class="px-2.5 py-1.5 rounded-md text-sm border border-border hover:border-ring">Reset filters</button>
+      <select id="bLimit" onchange="loadBrowse(0)" class="ml-auto rounded-md border border-border bg-muted text-xs text-foreground p-1.5">
+        <option value="25">25 / page</option>
+        <option value="50" selected>50 / page</option>
+        <option value="100">100 / page</option>
+        <option value="200">200 / page</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- table -->
+  <section class="bg-card border border-border rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-muted text-muted-foreground">
+          <tr>
+            <th class="text-left font-medium p-2" style="min-width:16rem">Prompt &amp; answer</th>
+            <th class="text-left font-medium p-2 whitespace-nowrap">Platform</th>
+            <th class="text-left font-medium p-2 whitespace-nowrap">Date</th>
+            <th class="text-left font-medium p-2 whitespace-nowrap">Sentiment</th>
+            <th class="text-left font-medium p-2 whitespace-nowrap">Mentioned</th>
+            <th class="text-right font-medium p-2 whitespace-nowrap">Search vol</th>
+          </tr>
+        </thead>
+        <tbody id="browseRows" class="divide-y divide-border"></tbody>
+      </table>
+    </div>
+    <div class="flex items-center justify-between gap-2 p-3 border-t border-border">
+      <button id="bPrev" onclick="pageBrowse(-1)" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">← Previous</button>
+      <span id="bRange" class="text-xs text-muted-foreground">—</span>
+      <button id="bNext" onclick="pageBrowse(1)" class="px-2.5 py-1 rounded-md text-xs border border-border hover:border-ring">Next →</button>
+    </div>
+  </section>
+</div><!-- /tabBrowse -->
+
+  <!-- methodology -->
+  <section class="bg-card border border-border rounded-xl p-4">
+    <button onclick="document.getElementById('method').classList.toggle('hidden')"
+            class="text-sm font-medium text-foreground">How this is calculated ▾</button>
+    <div id="method" class="hidden mt-3 text-xs text-muted-foreground flex flex-col gap-2">
+      <p><b class="text-foreground">Source.</b> <code>ahrefs_brand_radar.ai_responses_results</code>, scoped to the selected report's brands/competitors, one call per platform + dataset, <code>date=null</code> so every dated snapshot is returned, paged 1,000 rows at a time. Rows are stored locally and deduped on a hash of (report, dataset, platform, snapshot date, prompt, answer).</p>
+      <p><b class="text-foreground">Mention detection.</b> Brand Radar returns an empty <code>matched_brands</code> on this endpoint, so mentions are detected here with a whole-word, case-insensitive regex over every alias of every brand in the report. A response with no alias hit is <span class="t-absent font-medium">not mentioned</span> — no LLM call needed.</p>
+      <p><b class="text-foreground">Sentiment.</b> For mentioned responses, up to 2 excerpts of ±340 characters around the mentions are sent in batches to <code>gemini-3-flash</code> with a fixed rubric: <span class="t-positive font-medium">positive</span> = recommended/praised with no material criticism; <span class="t-neutral font-medium">neutral</span> = named or described without evaluation; <span class="t-mixed font-medium">mixed</span> = praise and criticism together or recommended-with-caveats; <span class="t-negative font-medium">negative</span> = criticism dominates. One verdict per response per subject brand, stored permanently — re-runs and new months never re-pay for an old response.</p>
+      <p><b class="text-foreground">Criticism intensity.</b> <code>negative × 2 + mixed × 1</code>, summed over all dated responses for that prompt under the current filters.</p>
+      <p><b class="text-foreground">Search volume.</b> The monthly search volume Brand Radar reports for the query behind the prompt; the maximum across that prompt's snapshots is shown.</p>
+      <p><b class="text-foreground">Reading the answers.</b> AI answers are markdown, so they're rendered as formatted text — headings, lists, tables, bold, links. Provider artifacts are cleaned first: empty citation markers like <code>[](#cp0)</code> (the cited URLs are listed separately under each answer) and backslash-escaped punctuation such as <code>\$49</code> or <code>1\.</code>. Answer HTML is sanitised before display because the text comes from a third party. In the single-response view, <b>View raw markdown</b> shows the untouched source.</p>
+      <p><b class="text-foreground">Brand highlighting.</b> Inside every answer, the <mark class="bh bh-subject">subject brand</mark> is highlighted in amber, <mark class="bh bh-competitor">competitors</mark> from the same Brand Radar report in blue, and <mark class="bh bh-niche">niche</mark> entries in purple. Matching uses the same whole-word alias rule as mention detection, longest alias first (so "Ahrefs Brand Radar" isn't split into "Ahrefs"), and only ever touches visible text — never a URL or link target. Hover a highlight to see which tracked brand it belongs to.</p>
+      <p><b class="text-foreground">Prompt drill-down.</b> Clicking any prompt row (criticism table, praise table or a trend mover) opens every dated response for that prompt, with its own filter bar: platform, sentiment, mentioned-vs-absent and sort. Those filters apply <i>within</i> the prompt and stack on top of the page-level scope; the counts beside each checkbox are for this prompt and stay fixed while you filter, so you can always see what else is in there. Leaving the platform boxes unticked falls back to whatever Report settings has selected.</p>
+      <p><b class="text-foreground">Browse tab.</b> One row per fetched answer, paged from the database (never all at once). It inherits the report / subject / platform / dataset / country / month choices from Report settings, then adds sentiment, mentioned-vs-absent, free-text and sort filters. Counts next to each sentiment checkbox are the facet totals under the <i>other</i> active filters. Rows fetched but not yet classified show as <b>unjudged</b> rather than being hidden, so the table total always equals what was actually pulled.</p>
+      <p><b class="text-foreground">Everything on this page is computed from stored rows.</b> Changing platform, country, month, sort or subject brand costs nothing. Only <i>Fetch</i> (Brand Radar pull) and <i>Analyse</i> (LLM verdicts) spend anything, and both are explicit buttons.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ===================================================== drill-down modal -->
+<div id="detailModal" class="hidden fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-auto"
+     onclick="if(event.target===this) closeDetail()">
+  <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-3xl my-6 flex flex-col">
+    <div class="flex items-start justify-between gap-3 p-4 border-b border-border">
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wide text-muted-foreground">Every dated response</div>
+        <h3 id="detailQ" class="text-sm font-semibold text-foreground mt-1"></h3>
+      </div>
+      <button onclick="closeDetail()" class="px-2 py-1 rounded-md text-xs border border-border hover:border-ring shrink-0">Close</button>
+    </div>
+
+    <!-- in-modal filters: same dimensions as the Browse tab, scoped to this prompt -->
+    <div class="px-4 py-3 border-b border-border flex flex-col gap-2.5 bg-muted/40">
+      <div class="flex flex-col gap-1.5">
+        <div class="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+          Platform
+          {{ tip("Only platforms that actually answered this prompt are listed, with how many dated responses each has. Unchecked = show all.") }}
+        </div>
+        <div id="dPlatforms" class="flex flex-wrap gap-1.5 text-[11px]"></div>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div class="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+          Sentiment
+          {{ tip("Counts are for this prompt and stay fixed as you filter, so you can always see what else is in here. Unchecked = show all.") }}
+        </div>
+        <div id="dVerdicts" class="flex flex-wrap gap-1.5 text-[11px]"></div>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex flex-col gap-1.5">
+          <div class="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+            Mentioned / absent
+            {{ tip("Mentioned = the brand appears in that answer. Absent = the prompt was answered without the brand coming up.") }}
+          </div>
+          <div class="flex gap-1.5 text-[11px]">
+            <label class="flex items-center gap-1 rounded-md border border-border px-2 py-1 bg-card"><input type="radio" name="dMention" value="any" checked onchange="reloadDetail()"><span>Any</span></label>
+            <label class="flex items-center gap-1 rounded-md border border-border px-2 py-1 bg-card"><input type="radio" name="dMention" value="mentioned" onchange="reloadDetail()"><span>Mentioned</span></label>
+            <label class="flex items-center gap-1 rounded-md border border-border px-2 py-1 bg-card"><input type="radio" name="dMention" value="absent" onchange="reloadDetail()"><span>Absent</span></label>
+          </div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[11px] font-medium text-foreground">Sort</label>
+          <select id="dSort" onchange="reloadDetail()" class="rounded-md border border-border bg-card text-[11px] text-foreground p-1.5">
+            <option value="date_desc">Newest first</option>
+            <option value="date_asc">Oldest first</option>
+            <option value="platform">Platform</option>
+          </select>
+        </div>
+        <div class="flex flex-col gap-1.5 ml-auto">
+          <span class="text-[11px] font-medium text-transparent select-none">.</span>
+          <button onclick="resetDetailFilters()" class="rounded-md border border-border bg-card px-2 py-1.5 text-[11px] hover:border-ring">Reset</button>
+        </div>
+      </div>
+      <div id="detailCount" class="text-[11px] text-muted-foreground"></div>
+    </div>
+
+    <div id="detailBody" class="p-4 flex flex-col gap-3 text-sm"></div>
+  </div>
+</div>
+<!-- ================================================ single-response modal -->
+<div id="respModal" class="hidden fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-auto"
+     onclick="if(event.target===this) closeResp()">
+  <div class="bg-card border border-border rounded-xl shadow-xl w-full max-w-3xl my-6 flex flex-col">
+    <div class="flex items-start justify-between gap-3 p-4 border-b border-border">
+      <div class="min-w-0">
+        <div id="respMeta" class="flex flex-wrap items-center gap-1.5 text-[11px]"></div>
+        <div class="text-[10px] uppercase tracking-wide text-muted-foreground mt-2">Prompt asked</div>
+        <h3 id="respQ" class="text-sm font-semibold text-foreground mt-0.5"></h3>
+      </div>
+      <button onclick="closeResp()" class="px-2 py-1 rounded-md text-xs border border-border hover:border-ring shrink-0">Close</button>
+    </div>
+    <div id="respBody" class="p-4 flex flex-col gap-3 text-sm"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API = {
+  ctx:     "{{ url_for('brand_answer_sentiment.api_context') }}",
+  view:    "{{ url_for('brand_answer_sentiment.api_view') }}",
+  prompt:  "{{ url_for('brand_answer_sentiment.api_prompt') }}",
+  fetch:   "{{ url_for('brand_answer_sentiment.api_fetch') }}",
+  analyse: "{{ url_for('brand_answer_sentiment.api_analyse') }}",
+  probe:   "{{ url_for('brand_answer_sentiment.api_probe') }}",
+  refresh: "{{ url_for('brand_answer_sentiment.api_refresh_reports') }}",
+  job:     "{{ url_for('brand_answer_sentiment.api_job') }}",
+  cancel:  "{{ url_for('brand_answer_sentiment.api_job_cancel') }}",
+  active:  "{{ url_for('brand_answer_sentiment.api_jobs_active') }}",
+  browse:  "{{ url_for('brand_answer_sentiment.api_browse') }}",
+  response:"{{ url_for('brand_answer_sentiment.api_response') }}",
+};
+const PLATFORMS = {{ platforms|tojson }};
+const PLABEL = {{ platform_labels|tojson }};
+const DLABEL = {{ dataset_labels|tojson }};
+const REPORTS = {{ reports|tojson }};
+
+let ctx = null;          // {report, entities, coverage, filters}
+let view = null;
+let jobId = null, jobTimer = null;
+let sel = { platforms: [], datasets: ["custom"], countries: [], months: [] };
+let chart = null;
+
+const fmt = n => (n ?? 0).toLocaleString();
+const esc = s => (s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+
+function toggleSettings(){
+  const b = document.getElementById('settingsBody');
+  b.classList.toggle('hidden');
+  document.getElementById('settingsCaret').textContent = b.classList.contains('hidden') ? '▾' : '▴';
+}
+
+// ------------------------------------------------------------------ settings
+async function refreshReports(){
+  const r = await fetch(API.refresh, {method:'POST'});
+  const d = await r.json();
+  if (d.error){ alert(d.error); return; }
+  location.reload();
+}
+
+async function probeReport(){
+  const btn = document.getElementById('probeBtn');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    const r = await fetch(API.probe, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({report_id: reportId()})});
+    const d = await r.json();
+    if (d.error) alert(d.error);
+    else { await loadContext(); }
+  } finally { btn.disabled = false; btn.textContent = 'Check available data'; }
+}
+
+const reportId = () => document.getElementById('reportSel').value;
+const subject  = () => document.getElementById('subjectSel').value;
+
+function reportRow(){ return REPORTS.find(r => r.report_id === reportId()) || {}; }
+
+async function onReportChange(){ await loadContext(); }
+async function onSubjectChange(){ await loadContext(true); }
+
+async function loadContext(keepSubject){
+  const rid = reportId();
+  const sub = keepSubject ? subject() : "";
+  const r = await fetch(`${API.ctx}?report_id=${encodeURIComponent(rid)}&subject=${encodeURIComponent(sub)}`);
+  ctx = await r.json();
+  if (ctx.error){ document.getElementById('reportMeta').textContent = ctx.error; return; }
+
+  // subject dropdown
+  const ss = document.getElementById('subjectSel');
+  if (!keepSubject){
+    ss.innerHTML = (ctx.entities||[]).map(e =>
+      `<option value="${esc(e.name)}">${esc(e.name)} — ${e.kind === 'brand' ? 'own brand' : e.kind}</option>`).join('')
+      || `<option value="">(no brands configured in this report)</option>`;
+    if (ctx.subject) ss.value = ctx.subject;
+  }
+
+  const rep = ctx.report || {};
+  const probe = rep.probe || {};
+  document.getElementById('reportMeta').textContent =
+    `${rep.n_custom_prompts || 0} custom prompts · owner ${rep.owner || '—'}` +
+    (rep.probed_at ? '' : ' · availability not checked yet');
+
+  // platform checkboxes
+  const cov = ctx.coverage || {};
+  const pb = document.getElementById('platformBoxes');
+  pb.innerHTML = PLATFORMS.map(p => {
+    const stored = ['custom','public'].reduce((a,ds)=>a+((cov[ds]||{})[p]||{}).stored||0, 0);
+    const avail  = ['custom','public'].reduce((a,ds)=>a+((probe[ds]||{})[p]||0), 0);
+    const dead   = rep.probed_at && avail === 0 && stored === 0;
+    const note = stored ? `${fmt(stored)} stored`
+               : (avail ? `${fmt(avail)} available, not fetched` : (rep.probed_at ? 'no data' : '—'));
+    return `<label class="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs ${dead?'opacity-40':''}">
+      <input type="checkbox" value="${p}" ${dead?'disabled':''} ${stored?'checked':''} onchange="syncSel()">
+      <span class="text-foreground">${PLABEL[p]}</span>
+      <span class="text-muted-foreground ml-auto">${note}</span></label>`;
+  }).join('');
+
+  // dataset checkboxes
+  const db = document.getElementById('datasetBoxes');
+  db.innerHTML = ['custom','public'].map(ds => {
+    const stored = PLATFORMS.reduce((a,p)=>a+(((cov[ds]||{})[p]||{}).stored||0), 0);
+    const avail  = PLATFORMS.reduce((a,p)=>a+((probe[ds]||{})[p]||0), 0);
+    return `<label class="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs">
+      <input type="checkbox" value="${ds}" ${ds==='custom'?'checked':''} onchange="syncSel()">
+      <span class="text-foreground">${DLABEL[ds]}</span>
+      <span class="text-muted-foreground ml-auto">${stored?fmt(stored)+' stored':(avail?fmt(avail)+' available':'—')}</span></label>`;
+  }).join('');
+
+  // country + month checkboxes (from stored data)
+  const f = ctx.filters || {countries:[], months:[]};
+  document.getElementById('countryBoxes').innerHTML = f.countries.length
+    ? f.countries.map(c => `<label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="checkbox" value="${c}" checked onchange="syncSel()"><span class="uppercase">${c}</span></label>`).join('')
+    : `<span class="text-muted-foreground">nothing stored yet</span>`;
+  document.getElementById('monthBoxes').innerHTML = f.months.length
+    ? f.months.map(m => `<label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1"><input type="checkbox" value="${m}" checked onchange="syncSel()"><span>${m}</span></label>`).join('')
+    : `<span class="text-muted-foreground">nothing stored yet</span>`;
+
+  syncSel();
+  renderCoverage();
+  renderChips();
+  await loadView();
+}
+
+function boxes(id){ return [...document.querySelectorAll(`#${id} input[type=checkbox]`)]; }
+function checked(id){ return boxes(id).filter(b=>b.checked).map(b=>b.value); }
+
+function syncSel(){
+  sel.platforms = checked('platformBoxes');
+  sel.datasets  = checked('datasetBoxes');
+  sel.countries = checked('countryBoxes');
+  sel.months    = checked('monthBoxes');
+  renderChips(); renderCoverage();
+}
+
+function renderChips(){
+  const rep = (ctx && ctx.report) || {};
+  const c = [];
+  c.push(['Report', rep.name || '—']);
+  c.push(['Subject', subject() || '—']);
+  c.push(['Platforms', sel.platforms.length ? sel.platforms.map(p=>PLABEL[p]).join(', ') : 'none selected']);
+  c.push(['Dataset', sel.datasets.map(d=>d==='custom'?'Custom prompts':'Public prompts').join(' + ') || 'none']);
+  const allC = boxes('countryBoxes').length;
+  c.push(['Country', sel.countries.length===0 ? '—' : (sel.countries.length===allC ? `all (${allC})` : sel.countries.join(', ').toUpperCase())]);
+  const allM = boxes('monthBoxes').length;
+  c.push(['Months', sel.months.length===0 ? '—' : (sel.months.length===allM ? `all (${allM})` : sel.months.join(', '))]);
+  document.getElementById('chips').innerHTML = c.map(([k,v]) =>
+    `<span class="chip px-2 py-0.5 rounded-full bg-muted"><b class="text-foreground font-medium">${esc(k)}</b><span class="text-muted-foreground">${esc(v)}</span></span>`).join('');
+}
+
+function renderCoverage(){
+  if (!ctx) return;
+  const cov = ctx.coverage || {}, probe = (ctx.report||{}).probe || {};
+  const missingFetch = [], missingJudge = [];
+  for (const ds of sel.datasets) for (const p of sel.platforms){
+    const c = (cov[ds]||{})[p] || {};
+    const avail = ((probe[ds]||{})[p]) || 0;
+    if (!c.stored && avail) missingFetch.push(`${PLABEL[p]} · ${DLABEL[ds]} (${fmt(avail)} available)`);
+    else if (c.stored && c.judged < c.stored) missingJudge.push(`${PLABEL[p]} · ${DLABEL[ds]} (${fmt(c.stored - c.judged)} unanalysed)`);
+  }
+  const el = document.getElementById('coverage');
+  let h = '';
+  if (missingFetch.length) h += `<div class="rounded-lg border border-border bg-muted p-2.5 mb-2">
+      <b class="text-foreground">Not fetched yet:</b> ${missingFetch.map(esc).join(' · ')}
+      <div class="mt-1.5"><button onclick="startFetch()" class="px-2 py-1 rounded-md text-xs bg-brand text-brand-foreground font-medium">Fetch + analyse these</button></div></div>`;
+  if (missingJudge.length) h += `<div class="rounded-lg border border-border bg-muted p-2.5">
+      <b class="text-foreground">Not analysed for ${esc(subject())}:</b> ${missingJudge.map(esc).join(' · ')}
+      <div class="mt-1.5"><button onclick="startAnalyse()" class="px-2 py-1 rounded-md text-xs bg-brand text-brand-foreground font-medium">Analyse ${esc(subject())}</button></div></div>`;
+  if (!h) h = `<div class="text-muted-foreground">All selected slices are fetched and analysed for ${esc(subject()||'—')}.</div>`;
+  el.innerHTML = h;
+}
+
+function applyFilters(){ syncSel(); loadView(); if (browseState.loaded) loadBrowse(0); }
+
+// ---------------------------------------------------------------------- view
+function qs(){
+  const p = new URLSearchParams({
+    report_id: reportId(), subject: subject(),
+    platforms: sel.platforms.join(','), datasets: sel.datasets.join(','),
+    countries: sel.countries.join(','), months: sel.months.join(','),
+    sort: document.getElementById('sortSel').value,
+    min_responses: document.getElementById('minResp').value || 1});
+  return p.toString();
+}
+
+async function loadView(){
+  if (!subject() || !sel.platforms.length || !sel.datasets.length){ renderEmpty(); return; }
+  const r = await fetch(`${API.view}?${qs()}`);
+  view = await r.json();
+  if (view.error){ renderEmpty(view.error); return; }
+  render();
+}
+
+function renderEmpty(msg){
+  document.getElementById('kpis').innerHTML =
+    `<div class="col-span-full rounded-xl border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+      ${esc(msg || 'Pick a report, subject brand, platform and dataset in Report settings, then fetch the data.')}</div>`;
+  document.getElementById('critRows').innerHTML = '';
+  document.getElementById('praiseRows').innerHTML = '';
+  document.getElementById('trendCard').classList.add('hidden');
+  document.getElementById('platCard').classList.add('hidden');
+}
+
+const KPI = [
+  ['mentioned','Mentioned','text-foreground', "Responses where the subject brand appears at least once (whole-word alias match on the answer text)."],
+  ['positive','Positive','t-positive', "Recommended or praised with no material criticism."],
+  ['neutral','Neutral','t-neutral', "Named, listed or described without any evaluation."],
+  ['mixed','Mixed','t-mixed', "Praise and criticism together, or recommended with caveats (“powerful but expensive”)."],
+  ['negative','Negative','t-negative', "Criticism dominates, or the answer steers the reader away from the brand."],
+  ['not_mentioned','Not mentioned','t-absent', "The prompt was answered but the brand never came up. Mentioned + Not mentioned = every response in the window."],
+];
+
+function render(){
+  const k = view.kpis, rep = (ctx.report||{}), s = subject();
+  const platLabel = sel.platforms.length === 1 ? PLABEL[sel.platforms[0]]
+                  : (sel.platforms.length === PLATFORMS.length ? 'AI assistants' : `${sel.platforms.length} AI platforms`);
+
+  // header
+  const dsTxt = sel.datasets.map(d=>d==='custom'?'BRAND RADAR CUSTOM QUERIES':'PUBLIC QUERIES').join(' + ');
+  const allC = boxes('countryBoxes').length;
+  const cTxt = (sel.countries.length && sel.countries.length < allC) ? sel.countries.join(', ').toUpperCase() : 'ALL COUNTRIES';
+  document.getElementById('eyebrow').textContent =
+    ['AI VISIBILITY', platLabel.toUpperCase(), dsTxt, cTxt].join(' · ');
+  document.getElementById('pageTitle').textContent = `What ${platLabel} says about ${s}`;
+
+  const w = view.window || {};
+  const nP = view.n_prompts_total;
+  document.getElementById('subtitle').textContent =
+    `${fmt(k.total)} ${platLabel} responses across ${fmt(nP)} prompt${nP===1?'':'s'}` +
+    (w.start ? ` (window ${w.start} – ${w.end}; ~${view.per_prompt_avg} responses per prompt).` : '.');
+
+  const cb = document.getElementById('capturedBadge');
+  const stamps = [];
+  for (const ds of sel.datasets) for (const p of sel.platforms){
+    const c = ((ctx.coverage||{})[ds]||{})[p]||{};
+    if (c.fetched_at) stamps.push(c.fetched_at);
+  }
+  if (stamps.length){
+    const latest = stamps.sort().slice(-1)[0];
+    cb.textContent = 'Captured ' + new Date(latest).toISOString().slice(0,16).replace('T',' ') + ' UTC';
+    cb.classList.remove('hidden');
+  } else cb.classList.add('hidden');
+  const rb = document.getElementById('reportBadge');
+  rb.textContent = 'Report ' + reportId().slice(0,8) + '…'; rb.classList.remove('hidden');
+
+  const warn = document.getElementById('warn');
+  if (view.n_unjudged > 0){
+    warn.innerHTML = `${fmt(view.n_unjudged)} stored response(s) in this selection have no sentiment verdict for <b>${esc(s)}</b> yet and are excluded from every number below.
+      <button onclick="startAnalyse()" class="ml-1 underline font-medium">Analyse them</button>`;
+    warn.classList.remove('hidden');
+  } else warn.classList.add('hidden');
+
+  // KPI cards
+  document.getElementById('kpis').innerHTML = KPI.map(([key,label,cls,tipTxt]) => `
+    <div class="bg-card border border-border rounded-xl p-3">
+      <div class="text-[11px] text-muted-foreground flex items-center gap-1">${label}
+        <span class="relative group inline-block">
+          <span class="cursor-help text-muted-foreground">ⓘ</span>
+          <span class="absolute bottom-full mb-1 left-0 hidden group-hover:block z-50 bg-card border border-border rounded-lg shadow-lg p-2.5 text-[11px] text-foreground w-56 normal-case font-normal">${tipTxt}</span>
+        </span>
+      </div>
+      <div class="mt-1 flex items-baseline gap-1">
+        <span class="text-2xl font-bold ${cls}">${fmt(k[key])}</span>
+        <span class="text-xs text-muted-foreground">/ ${fmt(k.total)}</span>
+      </div>
+      <div class="text-[11px] text-muted-foreground">${k.total ? (100*k[key]/k.total).toFixed(1) : '0.0'}%</div>
+    </div>`).join('');
+
+  // tables
+  const asc = !!view.sort_ascending;
+  document.getElementById('critTitle').textContent = asc
+    ? `Prompts ranked from least to most critical of ${s}`
+    : `Prompts where ${platLabel} criticizes ${s}`;
+  document.getElementById('critSub').textContent = asc
+    ? `Sorted by ${view.sort_label}. Prompts with no criticism at all are included — the cleanest prompts come first. Click a row to see every dated response.`
+    : `Sorted by ${view.sort_label} across all dated snapshots. Prompts with no negative or mixed response are hidden. Click a row to see every dated response that hit it.`;
+  document.getElementById('praiseTitle').textContent = `Prompts where ${platLabel} recommends ${s}`;
+  document.getElementById('critBadge').textContent = asc
+    ? `${fmt(view.prompts_critical.length)} of ${fmt(nP)} prompts · cleanest first`
+    : `${fmt(view.prompts_critical.length)} of ${fmt(nP)} prompts`;
+  document.getElementById('praiseBadge').textContent = `${fmt(view.prompts_praised.length)} of ${fmt(nP)} prompts`;
+  document.getElementById('critRows').innerHTML = view.prompts_critical.map(row).join('')
+    || `<div class="text-sm text-muted-foreground py-3">${asc
+          ? 'No prompt meets the minimum response count under these filters.'
+          : 'No prompt has a negative or mixed response under these filters.'}</div>`;
+  document.getElementById('praiseRows').innerHTML = view.prompts_praised.map(row).join('')
+    || `<div class="text-sm text-muted-foreground py-3">No positive responses under these filters.</div>`;
+
+  renderTrend(); renderPlatforms();
+}
+
+const ORDER = ['negative','mixed','neutral','positive','absent'];
+// verdict labels shared by the Browse tab and the prompt drill-down modal
+const VERDICTS = ['positive','neutral','mixed','negative','absent','unjudged'];
+function row(p){
+  const parts = ORDER.filter(k=>p.counts[k]).sort((a,b)=>p.counts[b]-p.counts[a])
+    .map(k => `<span class="t-${k}">${fmt(p.counts[k])} ${k === 'absent' ? 'absent' : k}</span>`).join(' · ');
+  const bar = p.segments.map(s => `<span class="v-${s.k}" style="width:${s.pct}%" title="${s.n} ${s.k}"></span>`).join('');
+  return `<div class="py-3 flex flex-col sm:flex-row sm:items-center gap-2">
+    <button onclick="openDetail('${p.prompt_hash}')" class="text-left min-w-0 flex-1 group">
+      <div class="text-sm font-medium text-foreground group-hover:underline">${esc(p.question)}</div>
+      <div class="text-[11px] text-muted-foreground mt-0.5">${fmt(p.n)} responses · search vol ${fmt(p.search_volume)} · ${parts}</div>
+    </button>
+    <div class="sm:w-40 shrink-0"><div class="bas-bar">${bar}</div></div>
+  </div>`;
+}
+
+function renderTrend(){
+  const t = view.trend || [];
+  const card = document.getElementById('trendCard');
+  if (t.length < 2){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  const m = view.movers || {};
+  const arrow = v => v > 0 ? `▲ +${v}` : (v < 0 ? `▼ ${v}` : '±0');
+  document.getElementById('trendSub').textContent =
+    `${m.prev_month} → ${m.month}: critical ${arrow(m.d_critical)} pts · positive ${arrow(m.d_positive)} pts · mention rate ${arrow(m.d_mentioned)} pts`;
+
+  const opts = {
+    chart:{type:'line', height:240, toolbar:{show:false}, fontFamily:'inherit'},
+    series:[
+      {name:'% critical (neg+mixed)', data:t.map(x=>x.pct_critical)},
+      {name:'% negative', data:t.map(x=>x.pct_negative)},
+      {name:'% positive', data:t.map(x=>x.pct_positive)},
+      {name:'mention rate %', data:t.map(x=>x.pct_mentioned)},
+    ],
+    colors:['#f59e0b','#f43f5e','#10b981','#64748b'],
+    stroke:{width:[3,2,2,2], curve:'straight', dashArray:[0,0,0,4]},
+    markers:{size:3},
+    xaxis:{categories:t.map(x=>x.month)},
+    yaxis:{labels:{formatter:v=>v.toFixed(0)+'%'}, max:100, min:0},
+    legend:{position:'top', fontSize:'11px'},
+    grid:{borderColor:'oklch(var(--border))'},
+    tooltip:{y:{formatter:(v,{dataPointIndex})=>`${v}%  (${fmt(t[dataPointIndex].total)} responses)`}},
+  };
+  if (chart) chart.destroy();
+  chart = new ApexCharts(document.getElementById('trendChart'), opts);
+  chart.render();
+
+  const pm = view.prompt_movers || [];
+  document.getElementById('movers').innerHTML = pm.length
+    ? `<div class="font-medium text-foreground">Biggest month-over-month swings (${m.prev_month} → ${m.month})</div>` +
+      pm.map(x => `<div class="flex items-start gap-2">
+        <span class="shrink-0 font-mono ${x.delta>0?'t-negative':'t-positive'}">${x.delta>0?'+':''}${x.delta} pts</span>
+        <button onclick="openDetail('${x.prompt_hash}')" class="text-left text-foreground hover:underline">${esc(x.question)}</button>
+        <span class="text-muted-foreground shrink-0">${x.before}% → ${x.now}% critical</span></div>`).join('')
+    : `<div class="text-muted-foreground">No prompt moved more than 5 points month-over-month.</div>`;
+}
+
+function renderPlatforms(){
+  const ps = view.platform_split || [];
+  const card = document.getElementById('platCard');
+  if (ps.length < 2){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  document.getElementById('platRows').innerHTML = ps.map(p => {
+    const tot = p.total || 1;
+    const bar = ORDER.filter(k=>p.counts[k]).map(k=>`<span class="v-${k}" style="width:${100*p.counts[k]/tot}%" title="${p.counts[k]} ${k}"></span>`).join('');
+    return `<div class="flex flex-col sm:flex-row sm:items-center gap-2">
+      <div class="min-w-0 flex-1">
+        <div class="text-sm text-foreground">${p.label}</div>
+        <div class="text-[11px] text-muted-foreground">${fmt(p.total)} responses · mentioned ${p.pct_mentioned}% · critical ${p.pct_critical}% · positive ${p.pct_positive}%</div>
+      </div>
+      <div class="sm:w-40 shrink-0"><div class="bas-bar">${bar}</div></div></div>`;
+  }).join('');
+}
+
+// ============================================ markdown + brand highlighting
+// AI answers are markdown. Pipeline: clean provider artifacts -> marked ->
+// DOMPurify -> highlight brand aliases in TEXT NODES ONLY (never inside href/
+// attributes, so a domain in a URL can't be mangled).
+if (window.marked) marked.setOptions({gfm:true, breaks:true});
+
+// Brand Radar leaves inline citation stubs like `[](#cp0)` / `[](#tl3)` and
+// backslash-escapes `\$`, `1\.` in provider output. Strip them so the prose reads.
+function cleanAnswer(t){
+  return (t || '')
+    // Citation markers point at internal anchors (#cp0/#tl3) that don't resolve in
+    // this UI, and the cited links are listed separately below the answer — so drop
+    // both the empty and the labelled form rather than leaving them inline.
+    .replace(/\[\s*\]\((?:#(?:cp|tl|ref)\d+)?\)/gi, '')
+    .replace(/\[[^\]\n]{0,200}\]\(#(?:cp|tl|ref)\d+\)/gi, '')
+    .replace(/\\([$#*_~`[\](){}.\-+!>|])/g, '$1')          // escaped punctuation
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Longest alias first so "Ahrefs Brand Radar" wins over "Ahrefs".
+function brandRules(){
+  const ents = (ctx && ctx.entities) || [];
+  const subj = subject();
+  const rules = [];
+  for (const e of ents){
+    const cls = e.name === subj ? 'bh-subject'
+              : (e.kind === 'niche' ? 'bh-niche' : 'bh-competitor');
+    for (const kw of (e.keywords && e.keywords.length ? e.keywords : [e.name])){
+      const k = (kw || '').trim();
+      if (k.length > 1) rules.push({term:k, cls, name:e.name});
+    }
+  }
+  rules.sort((a,b)=>b.term.length - a.term.length);
+  return rules;
+}
+
+function brandRegex(rules){
+  if (!rules.length) return null;
+  const alts = rules.map(r => r.term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // (?<![A-Za-z0-9]) … (?![A-Za-z0-9]) = the same whole-word rule the backend uses
+  return new RegExp('(?<![A-Za-z0-9])(' + alts.join('|') + ')(?![A-Za-z0-9])', 'gi');
+}
+
+function highlightBrands(root){
+  const rules = brandRules();
+  const rx = brandRegex(rules);
+  if (!rx) return;
+  const byTerm = new Map(rules.map(r => [r.term.toLowerCase(), r]));
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n){
+      // skip text already inside a highlight, a link, or code
+      const p = n.parentElement;
+      if (!p || p.closest('mark.bh, a, code, pre')) return NodeFilter.FILTER_REJECT;
+      return rx.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    }
+  });
+  const targets = [];
+  let n; while ((n = walker.nextNode())) targets.push(n);
+  for (const node of targets){
+    const frag = document.createDocumentFragment();
+    let last = 0; const text = node.nodeValue;
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(text)) !== null){
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const rule = byTerm.get(m[1].toLowerCase());
+      const mk = document.createElement('mark');
+      mk.className = 'bh ' + (rule ? rule.cls : 'bh-competitor');
+      mk.textContent = m[1];
+      if (rule) mk.title = rule.name === subject() ? `${rule.name} (your subject brand)` : `${rule.name} (competitor)`;
+      frag.appendChild(mk);
+      last = m.index + m[1].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+/** Render one AI answer into `el` as highlighted markdown. */
+function renderAnswer(el, raw){
+  if (!el) return;
+  const src = cleanAnswer(raw);
+  // AI answers are untrusted text — they can contain raw HTML/script. Three tiers,
+  // each safe on its own: sanitize the rendered markdown; failing that, escape the
+  // source BEFORE parsing markdown (formatting survives, HTML can't execute);
+  // failing both, plain text with line breaks.
+  let html;
+  try {
+    if (window.marked && window.DOMPurify){
+      html = DOMPurify.sanitize(marked.parse(src), {ADD_ATTR:['target','rel']});
+    } else if (window.marked){
+      html = marked.parse(esc(src));
+    } else {
+      html = esc(src).replace(/\n/g, '<br>');
+    }
+  } catch (e){
+    html = esc(src).replace(/\n/g, '<br>');
+  }
+  el.innerHTML = html;
+  el.querySelectorAll('a[href]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+  highlightBrands(el);
+}
+
+/** Hydrate every `[data-answer]` placeholder inside a container. */
+function hydrateAnswers(root){
+  root.querySelectorAll('[data-answer]').forEach(el => {
+    if (el.dataset.rendered) return;
+    el.dataset.rendered = '1';
+    renderAnswer(el, decodeURIComponent(el.dataset.answer));
+  });
+}
+
+/** Legend explaining the highlight colours; hidden when nothing is tracked. */
+function brandLegend(){
+  const ents = (ctx && ctx.entities) || [];
+  if (!ents.length) return '';
+  const subj = subject();
+  const comps = ents.filter(e => e.name !== subj && e.kind !== 'niche').map(e => e.name);
+  const niche = ents.filter(e => e.kind === 'niche').map(e => e.name);
+  return `<div class="text-[11px] text-muted-foreground flex flex-wrap items-center gap-2">
+    <span>Highlighted:</span>
+    <span><mark class="bh bh-subject">${esc(subj)}</mark> subject brand</span>
+    ${comps.length ? `<span><mark class="bh bh-competitor">competitors</mark> ${esc(comps.slice(0,6).join(', '))}${comps.length>6?` +${comps.length-6} more`:''}</span>` : ''}
+    ${niche.length ? `<span><mark class="bh bh-niche">niche</mark> ${esc(niche.slice(0,4).join(', '))}</span>` : ''}
+  </div>`;
+}
+
+// ------------------------------------------------------------------- details
+// The drill-down modal carries the same filter dimensions as the Browse tab,
+// scoped to one prompt. `detailPrompt` remembers which prompt is open so a
+// filter change re-queries the same one.
+let detailPrompt = null;
+
+function detailQs(){
+  const verdicts = [...document.querySelectorAll('#dVerdicts input:checked')].map(b=>b.value);
+  const plats = [...document.querySelectorAll('#dPlatforms input:checked')].map(b=>b.value);
+  const mention = (document.querySelector('input[name=dMention]:checked')||{}).value || 'any';
+  return new URLSearchParams({
+    report_id: reportId(), subject: subject(), prompt_hash: detailPrompt || '',
+    // an empty platform selection inside the modal falls back to the page scope
+    platforms: (plats.length ? plats : sel.platforms).join(','),
+    datasets: sel.datasets.join(','),
+    countries: sel.countries.join(','), months: sel.months.join(','),
+    verdicts: verdicts.join(','), mention,
+    sort: (document.getElementById('dSort')||{}).value || 'date_desc',
+  }).toString();
+}
+
+async function openDetail(ph){
+  detailPrompt = ph;
+  const modal = document.getElementById('detailModal');
+  document.getElementById('detailQ').textContent = 'loading…';
+  document.getElementById('detailBody').innerHTML = '';
+  document.getElementById('dPlatforms').innerHTML = '';
+  document.getElementById('dVerdicts').innerHTML = '';
+  resetDetailInputs();
+  modal.classList.remove('hidden');
+  await reloadDetail(true);
+}
+
+function resetDetailInputs(){
+  const any = document.querySelector('input[name=dMention][value=any]');
+  if (any) any.checked = true;
+  const so = document.getElementById('dSort'); if (so) so.value = 'date_desc';
+}
+
+function resetDetailFilters(){
+  document.querySelectorAll('#dVerdicts input, #dPlatforms input').forEach(b=>b.checked=false);
+  resetDetailInputs();
+  reloadDetail();
+}
+
+async function reloadDetail(rebuildFacets){
+  if (!detailPrompt) return;
+  const r = await fetch(`${API.prompt}?${detailQs()}`);
+  const d = await r.json();
+  if (d.error){ document.getElementById('detailQ').textContent = d.error; return; }
+  document.getElementById('detailQ').textContent = d.question || '';
+
+  // Facet checkboxes are (re)built only on open — rebuilding them on every filter
+  // change would wipe the user's own ticks mid-interaction.
+  if (rebuildFacets){
+    const pf = d.platform_facets || {};
+    document.getElementById('dPlatforms').innerHTML = Object.keys(pf).length
+      ? Object.entries(pf).sort((a,b)=>b[1]-a[1]).map(([p,n]) =>
+          `<label class="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1">
+             <input type="checkbox" value="${p}" onchange="reloadDetail()">
+             <span class="text-foreground">${PLABEL[p]||p}</span>
+             <span class="text-muted-foreground">${fmt(n)}</span></label>`).join('')
+      : '<span class="text-muted-foreground">—</span>';
+    const f = d.facets || {};
+    document.getElementById('dVerdicts').innerHTML = VERDICTS.filter(v=>f[v]).map(v =>
+      `<label class="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1">
+         <input type="checkbox" value="${v}" onchange="reloadDetail()">
+         <span class="t-${v === 'unjudged' ? 'neutral' : v} capitalize">${v}</span>
+         <span class="text-muted-foreground">${fmt(f[v])}</span></label>`).join('')
+      || '<span class="text-muted-foreground">—</span>';
+  }
+
+  const filtered = d.shown !== d.total;
+  document.getElementById('detailCount').innerHTML =
+    `<div>${filtered
+      ? `Showing ${fmt(d.shown)} of ${fmt(d.total)} dated responses for this prompt`
+      : `${fmt(d.total)} dated response${d.total===1?'':'s'} for this prompt`}</div>` + brandLegend();
+
+  document.getElementById('detailBody').innerHTML = (d.responses||[]).map(x => `
+    <div class="rounded-lg border border-border p-3 flex flex-col gap-2">
+      <div class="flex flex-wrap items-center gap-2 text-[11px]">
+        <span class="px-2 py-0.5 rounded-full bg-muted text-foreground">${x.snapshot_date}</span>
+        <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${x.platform_label}</span>
+        <span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground uppercase">${esc(x.country)}</span>
+        <span class="px-2 py-0.5 rounded-full bg-muted font-medium t-${x.verdict === 'unjudged' ? 'neutral' : x.verdict}">${x.verdict}</span>
+        ${(x.themes||[]).map(t=>`<span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${esc(t)}</span>`).join('')}
+      </div>
+      <div class="rounded-md bg-muted/60 border border-border px-2.5 py-2">
+        <div class="text-[10px] uppercase tracking-wide text-muted-foreground">Prompt asked</div>
+        <div class="text-xs text-foreground mt-0.5">${esc(x.question || '')}</div>
+      </div>
+      ${x.one_liner ? `<div class="text-sm text-foreground">${esc(x.one_liner)}</div>` : ''}
+      ${x.evidence ? `<blockquote class="text-xs border-l-2 border-border pl-2 text-muted-foreground italic">“${esc(x.evidence)}”</blockquote>` : ''}
+      <details ontoggle="if(this.open) hydrateAnswers(this)"><summary class="text-xs text-muted-foreground cursor-pointer">Full answer</summary>
+        <div class="bas-answer md mt-2 text-xs text-foreground" data-answer="${encodeURIComponent(x.response || '')}">…</div></details>
+      ${(x.sitelinks||[]).length ? `<details><summary class="text-xs text-muted-foreground cursor-pointer">${x.sitelinks.length} cited link(s)</summary>
+        <ul class="mt-2 flex flex-col gap-1">${x.sitelinks.map(s=>`<li class="text-xs"><a href="${esc(s.url)}" target="_blank" rel="noopener" class="text-foreground underline break-all">${esc(s.title||s.url)}</a>${s.cited?'':' <span class="text-muted-foreground">(found, not cited)</span>'}</li>`).join('')}</ul></details>` : ''}
+    </div>`).join('') || '<div class="text-sm text-muted-foreground">No response matches these filters. Use Reset to clear them.</div>';
+}
+function closeDetail(){ document.getElementById('detailModal').classList.add('hidden'); detailPrompt = null; }
+
+// ---------------------------------------------------------------------- jobs
+async function startFetch(){
+  const body = {report_id: reportId(), platforms: sel.platforms, datasets: sel.datasets,
+                window_months: parseInt(document.getElementById('windowSel').value,10),
+                subject: subject(), analyse: true};
+  if (!body.platforms.length){ alert('Pick at least one platform.'); return; }
+  const r = await fetch(API.fetch, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if (d.job_id) watchJob(d.job_id);
+}
+
+async function startAnalyse(){
+  const r = await fetch(API.analyse, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({report_id: reportId(), subject: subject(),
+                          platforms: sel.platforms, datasets: sel.datasets})});
+  const d = await r.json();
+  if (d.job_id) watchJob(d.job_id);
+}
+
+function watchJob(id){
+  jobId = id;
+  document.getElementById('jobBox').classList.remove('hidden');
+  if (jobTimer) clearInterval(jobTimer);
+  jobTimer = setInterval(pollJob, 2000);
+  pollJob();
+}
+
+async function pollJob(){
+  if (!jobId) return;
+  const r = await fetch(`${API.job}?job_id=${jobId}`);
+  const d = await r.json();
+  document.getElementById('jobStage').textContent = d.stage || d.status;
+  const pct = d.total ? Math.min(100, Math.round(100*d.done/d.total)) : (d.status==='done'?100:8);
+  document.getElementById('jobBar').style.width = pct + '%';
+  document.getElementById('jobLog').textContent = (d.log||[]).join('\n');
+  if (d.status === 'done' || d.status === 'error'){
+    clearInterval(jobTimer); jobTimer = null;
+    if (d.error) document.getElementById('jobStage').textContent = 'Error: ' + d.error;
+    jobId = null;
+    await loadContext(true);
+    setTimeout(()=>document.getElementById('jobBox').classList.add('hidden'), d.error?15000:4000);
+  }
+}
+
+async function cancelJob(){
+  if (!jobId) return;
+  await fetch(API.cancel, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({job_id: jobId})});
+}
+
+
+// ================================================================ BROWSE TAB
+let browseState = {offset:0, total:0, limit:50, loaded:null};
+let activeTab = 'overview';
+
+function showTab(t){
+  activeTab = t;
+  document.getElementById('tabOverview').classList.toggle('hidden', t !== 'overview');
+  document.getElementById('tabBrowse').classList.toggle('hidden', t !== 'browse');
+  for (const [id, name] of [['tabBtnOverview','overview'], ['tabBtnBrowse','browse']]){
+    const b = document.getElementById(id);
+    const on = name === t;
+    b.className = 'px-3 py-2 text-sm font-medium border-b-2 -mb-px ' +
+      (on ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground');
+  }
+  if (t === 'browse' && !browseState.loaded) loadBrowse(0);
+}
+
+function buildVerdictBoxes(){
+  const el = document.getElementById('bVerdicts');
+  if (el.dataset.built) return;
+  el.dataset.built = '1';
+  el.innerHTML = VERDICTS.map(v => `
+    <label class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
+      <input type="checkbox" value="${v}" onchange="loadBrowse(0)">
+      <span class="t-${v === 'unjudged' ? 'neutral' : v} capitalize">${v}</span>
+      <span class="text-muted-foreground" data-facet="${v}"></span>
+    </label>`).join('');
+}
+
+function browseQs(offset){
+  const verdicts = [...document.querySelectorAll('#bVerdicts input:checked')].map(b=>b.value);
+  const mention = (document.querySelector('input[name=bMention]:checked')||{}).value || 'any';
+  return new URLSearchParams({
+    report_id: reportId(), subject: subject(),
+    platforms: sel.platforms.join(','), datasets: sel.datasets.join(','),
+    countries: sel.countries.join(','), months: sel.months.join(','),
+    verdicts: verdicts.join(','), mention,
+    search: document.getElementById('bSearch').value.trim(),
+    sort: document.getElementById('bSort').value,
+    limit: document.getElementById('bLimit').value,
+    offset: Math.max(0, offset|0),
+  }).toString();
+}
+
+async function loadBrowse(offset){
+  buildVerdictBoxes();
+  if (!subject() || !sel.platforms.length || !sel.datasets.length){
+    document.getElementById('browseRows').innerHTML =
+      `<tr><td colspan="6" class="p-4 text-center text-muted-foreground">Pick a subject brand, platform and dataset in Report settings.</td></tr>`;
+    return;
+  }
+  const r = await fetch(`${API.browse}?${browseQs(offset)}`);
+  const d = await r.json();
+  if (d.error){ alert(d.error); return; }
+  browseState = {offset: d.offset, total: d.total, limit: d.limit, loaded: d.rows};
+
+  for (const v of VERDICTS){
+    const n = (d.facets||{})[v] || 0;
+    const el = document.querySelector(`#bVerdicts [data-facet="${v}"]`);
+    if (el) el.textContent = n ? fmt(n) : '';
+  }
+
+  document.getElementById('browseCount').textContent =
+    `${fmt(d.total)} response${d.total===1?'':'s'} match · subject ${subject()}`;
+  document.getElementById('browseRows').innerHTML = d.rows.map(browseRow).join('')
+    || `<tr><td colspan="6" class="p-4 text-center text-muted-foreground">No response matches these filters.</td></tr>`;
+
+  const from = d.total ? d.offset + 1 : 0, to = Math.min(d.offset + d.limit, d.total);
+  document.getElementById('bRange').textContent = `${fmt(from)}–${fmt(to)} of ${fmt(d.total)}`;
+  document.getElementById('bPrev').disabled = d.offset <= 0;
+  document.getElementById('bNext').disabled = to >= d.total;
+  for (const id of ['bPrev','bNext']){
+    const b = document.getElementById(id);
+    b.classList.toggle('opacity-40', b.disabled);
+  }
+}
+
+function browseRow(r){
+  return `<tr class="hover:bg-muted/50 align-top">
+    <td class="p-2">
+      <button onclick="openResp('${r.response_hash}')" class="text-left group">
+        <div class="text-foreground font-medium group-hover:underline">${esc(r.question)}</div>
+        <div class="text-muted-foreground mt-0.5 line-clamp-2">${esc(r.one_liner || r.answer_preview)}</div>
+        <div class="text-muted-foreground/70 mt-0.5">${fmt(r.answer_chars)} chars · ${r.n_links} link(s)${(r.themes||[]).length ? ' · ' + r.themes.map(esc).join(', ') : ''}</div>
+      </button>
+    </td>
+    <td class="p-2 whitespace-nowrap text-muted-foreground">${r.platform_label}<div class="uppercase text-muted-foreground/70">${esc(r.country)}</div></td>
+    <td class="p-2 whitespace-nowrap text-muted-foreground">${r.snapshot_date}</td>
+    <td class="p-2 whitespace-nowrap"><span class="px-2 py-0.5 rounded-full bg-muted font-medium t-${r.verdict === 'unjudged' ? 'neutral' : r.verdict}">${r.verdict}</span></td>
+    <td class="p-2 whitespace-nowrap">${r.mentioned
+      ? '<span class="t-positive font-medium">yes</span>'
+      : `<span class="t-absent">${r.verdict === 'unjudged' ? 'unknown' : 'no'}</span>`}</td>
+    <td class="p-2 whitespace-nowrap text-right text-foreground">${fmt(r.search_volume)}</td>
+  </tr>`;
+}
+
+function pageBrowse(dir){
+  const next = browseState.offset + dir * browseState.limit;
+  if (next < 0 || next >= browseState.total) return;
+  loadBrowse(next);
+}
+
+function resetBrowse(){
+  document.querySelectorAll('#bVerdicts input').forEach(b=>b.checked=false);
+  const any = document.querySelector('input[name=bMention][value=any]'); if (any) any.checked = true;
+  document.getElementById('bSearch').value = '';
+  document.getElementById('bSort').value = 'date_desc';
+  loadBrowse(0);
+}
+
+function exportBrowseCsv(){
+  const rows = browseState.loaded || [];
+  if (!rows.length) return;
+  const q = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const csv = [['prompt','platform','country','date','sentiment','mentioned','search_volume','themes','evidence','one_liner'].join(',')]
+    .concat(rows.map(r => [r.question, r.platform_label, r.country, r.snapshot_date, r.verdict,
+                           r.mentioned ? 'yes':'no', r.search_volume, (r.themes||[]).join('|'),
+                           r.evidence, r.one_liner].map(q).join(',')))
+    .join('\n');
+  navigator.clipboard.writeText(csv).then(
+    ()=>alert(`Copied ${rows.length} rows as CSV.`),
+    ()=>alert('Could not access the clipboard.'));
+}
+
+async function openResp(h){
+  const modal = document.getElementById('respModal');
+  document.getElementById('respQ').textContent = 'loading…';
+  document.getElementById('respMeta').innerHTML = '';
+  document.getElementById('respBody').innerHTML = '';
+  modal.classList.remove('hidden');
+  const r = await fetch(`${API.response}?report_id=${encodeURIComponent(reportId())}&subject=${encodeURIComponent(subject())}&response_hash=${encodeURIComponent(h)}`);
+  const d = await r.json();
+  if (d.error){ document.getElementById('respQ').textContent = d.error; return; }
+  document.getElementById('respQ').textContent = d.question || '';
+  document.getElementById('respMeta').innerHTML = [
+    `<span class="px-2 py-0.5 rounded-full bg-muted text-foreground">${d.snapshot_date}</span>`,
+    `<span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${d.platform_label}</span>`,
+    `<span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground uppercase">${esc(d.country)}</span>`,
+    `<span class="px-2 py-0.5 rounded-full bg-muted font-medium t-${d.verdict === 'unjudged' ? 'neutral' : d.verdict}">${d.verdict}</span>`,
+    `<span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">search vol ${fmt(d.search_volume)}</span>`,
+    ...(d.themes||[]).map(t=>`<span class="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">${esc(t)}</span>`),
+  ].join('');
+  document.getElementById('respBody').innerHTML = `
+    ${d.one_liner ? `<div class="text-sm text-foreground">${esc(d.one_liner)}</div>` : ''}
+    ${d.evidence ? `<blockquote class="text-xs border-l-2 border-border pl-2 text-muted-foreground italic">“${esc(d.evidence)}”</blockquote>` : ''}
+    ${(d.brands_hit||[]).length ? `<div class="text-xs text-muted-foreground">Brands detected in this answer: <span class="text-foreground">${d.brands_hit.map(esc).join(', ')}</span></div>` : ''}
+    <div class="rounded-md bg-muted/60 border border-border px-2.5 py-2">
+      <div class="text-[10px] uppercase tracking-wide text-muted-foreground">Prompt asked</div>
+      <div class="text-xs text-foreground mt-0.5">${esc(d.question || '')}</div>
+    </div>
+    <div><div class="flex items-center justify-between gap-2 mb-1">
+        <div class="text-xs font-medium text-foreground">Full answer</div>
+        <button onclick="toggleRawAnswer()" id="rawToggle" class="px-2 py-0.5 rounded-md text-[11px] border border-border hover:border-ring">View raw markdown</button>
+      </div>
+      <div id="respAnswer" class="bas-answer md text-xs text-foreground border border-border rounded-lg p-2"
+           data-answer="${encodeURIComponent(d.response || '')}">…</div></div>
+    ${brandLegend()}
+    ${(d.sitelinks||[]).length ? `<details><summary class="text-xs text-muted-foreground cursor-pointer">${d.sitelinks.length} cited link(s)</summary>
+      <ul class="mt-2 flex flex-col gap-1">${d.sitelinks.map(x=>`<li class="text-xs"><a href="${esc(x.url)}" target="_blank" rel="noopener" class="text-foreground underline break-all">${esc(x.title||x.url)}</a>${x.cited?'':' <span class="text-muted-foreground">(found, not cited)</span>'}</li>`).join('')}</ul></details>` : ''}
+    ${(d.search_queries||[]).length ? `<div class="text-xs text-muted-foreground">Web searches the model ran: ${d.search_queries.map(esc).join(' · ')}</div>` : ''}`;
+  hydrateAnswers(document.getElementById('respBody'));
+}
+function closeResp(){ document.getElementById('respModal').classList.add('hidden'); }
+
+// Raw view is useful when the markdown itself is the question (broken tables,
+// stray citation stubs). Highlighting still applies so brands stay findable.
+function toggleRawAnswer(){
+  const el = document.getElementById('respAnswer'); if (!el) return;
+  const btn = document.getElementById('rawToggle');
+  const raw = decodeURIComponent(el.dataset.answer || '');
+  if (el.dataset.mode === 'raw'){
+    el.dataset.mode = 'md';
+    el.classList.add('md');
+    el.style.whiteSpace = '';
+    renderAnswer(el, raw);
+    if (btn) btn.textContent = 'View raw markdown';
+  } else {
+    el.dataset.mode = 'raw';
+    el.classList.remove('md');
+    el.style.whiteSpace = 'pre-wrap';
+    el.textContent = raw;
+    highlightBrands(el);
+    if (btn) btn.textContent = 'View formatted';
+  }
+}
+
+// -------------------------------------------------------------------- startup
+(async function(){
+  if (!REPORTS.length){
+    renderEmpty('No Brand Radar reports cached yet — click “Refresh report list” in Report settings.');
+    document.getElementById('settingsBody').classList.remove('hidden');
+    return;
+  }
+  showTab('overview');
+  await loadContext();
+  const r = await fetch(API.active); const d = await r.json();
+  if ((d.jobs||[]).length) watchJob(d.jobs[0].job_id);
+  if (!view || !view.kpis || !view.kpis.total) document.getElementById('settingsBody').classList.remove('hidden');
+})();
+</script>
+{% endblock %}
